@@ -307,15 +307,17 @@ class Reader:
 
     @staticmethod
     def readings(pack: str, hashes: set[str], wanted: int) -> tuple[list[dict], list[LiveReadFailed]]:
-        """The readings at once, each its own child process, in order. Only the first may start Muse Glimmer; another
-        that misses the kept answers stops and does not count. Failures in order too, so the first reading's reason leads."""
+        """The readings at once, each its own child process, in order. Only the first may start Muse Glimmer, unless one
+        is already shared; another that misses the kept answers stops and does not count. Failures in order too, so the
+        first reading's reason leads."""
         timeout = live.read_timeout()
         got: list[dict | None] = [None] * wanted
         failed: list[LiveReadFailed | None] = [None] * wanted
 
         def one(i: int) -> None:
             try:
-                got[i] = run_live_read(pack, hashes, timeout) if i == 0 else run_live_read(pack, hashes, timeout, glimmer=False)
+                may_start = i == 0 or live.shared_glimmer()
+                got[i] = run_live_read(pack, hashes, timeout) if may_start else run_live_read(pack, hashes, timeout, glimmer=False)
             except LiveReadFailed as exc:
                 failed[i] = exc
             except Exception as exc:  # noqa: BLE001 - one reading's bug must not lose the other

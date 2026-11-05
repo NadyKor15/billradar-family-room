@@ -54,6 +54,12 @@ def readings() -> int:
     return n
 
 
+def shared_glimmer() -> bool:
+    """LIVE_SHARED_GLIMMER=1: one Muse Glimmer already answers on its port (BILLRADAR_GLIMMER_PORT), so every reading may
+    use it. Otherwise only the first reading may start one: two on one computer would not fit or share the port."""
+    return os.environ.get("LIVE_SHARED_GLIMMER") == "1"
+
+
 def not_ready() -> str | None:
     """Why a live reading cannot start. Muse Glimmer is needed only when a sheet misses its recording, so the reading
     itself says so (`live_read`); it stops at the first such sheet, after one SAM call."""

@@ -87,6 +87,14 @@ def test_two_at_once_and_only_the_first_may_start_glimmer(rd, monkeypatch):
     assert sorted(seen) == [False, True]
 
 
+def test_a_shared_glimmer_serves_every_reading(rd, monkeypatch):
+    rd.engine.by_case = {"a1": [E2, F1]}
+    monkeypatch.setenv("LIVE_SHARED_GLIMMER", "1")
+    seen = two(monkeypatch, reading("a1", "1596.53"), reading("a1", "1596.53"))
+    go(rd)
+    assert seen == [True, True]
+
+
 def test_they_really_run_at_the_same_time(rd, monkeypatch):
     both_in = threading.Barrier(2, timeout=5)  # breaks, and the reading fails, if the second waits for the first
 
