@@ -30,6 +30,7 @@ from family_room import handoff, live, state
 from family_room.engine import (JOURNAL, Engine, EngineError, LiveReadFailed, engine_log, match_pack, profile, run_live_read,
                                 sha256)
 from family_room.pii import LONG_DIGITS, Gate, PrivacyError
+from family_room.progress import Progress
 from family_room.switch import Agent
 
 log = logging.getLogger("family_room.reader")
@@ -268,7 +269,8 @@ class Reader:
         mark, log_mark, began = live.journal_mark(JOURNAL), live.journal_mark(engine_log()), time.monotonic()
         stopped, a = None, {}
         try:
-            a = run_live_read(pack, hashes, live.read_timeout())
+            with Progress(lambda text: self.agent.post(room, text), JOURNAL, mark):
+                a = run_live_read(pack, hashes, live.read_timeout())
         except LiveReadFailed as exc:
             log.exception("live reading stopped (pack %s). Its log says: %s", pack, live.text_since(engine_log(), log_mark)[-2000:])
             stopped = LIVE_STOP_WORDS.get(exc.kind, LIVE_STOP_OTHER)

@@ -113,6 +113,26 @@ def journal_since(path: Path, mark: int) -> dict:
     return {"models": models, "usd": round(usd, 6), "calls": calls}
 
 
+def journal_seen(path: Path, mark: int) -> dict:
+    """Which live models the journal shows after `mark`, each in order of first appearance: {"seen": the model of any
+    live row, a request that has left included, "answered": the models of answered calls (rows with a price)}.
+    For a progress line, which must not wait for a model's first answer. A half-written last line is skipped."""
+    seen: list[str] = []
+    answered: list[str] = []
+    for raw in text_since(path, mark).splitlines():
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        model = row.get("model") if isinstance(row, dict) and row.get("live") else None
+        if model:
+            if model not in seen:
+                seen.append(model)
+            if "usd" in row and model not in answered:
+                answered.append(model)
+    return {"seen": seen, "answered": answered}
+
+
 def model_names(ids: list[str]) -> list[str]:
     return [MODEL_NAMES.get(i, i) for i in ids]
 
