@@ -4,7 +4,8 @@ that has to succeed (a check that cannot fail proves nothing).
   V1 rooms      the chat-facing agent is not a member of any private room (Switch's room records)
   V2 canary     the scanner finds a planted private value in a control room (must light)
   V3 no leaks   0 private values, account-like numbers or media handles in the family and handoff rooms
-  V4 schema     every agent message in the handoff room parses as strict BRv1
+  V4 schema     every agent message in the handoff room parses as strict BRv1, and none can render as
+                an emoticon in Mattermost (control: the same scan lights on a synthetic old-form message)
   V5 refusal    coordinator's own key: private room read/post/media -> 403; family read -> 200 (control)
   V6 policy     a card in the patient's room: the operator account's answer is refused,
                 the patient's answer on the same card is accepted (control)
@@ -111,8 +112,14 @@ def main() -> int:
             handoff.decode(m["body"])
         except handoff.SchemaError as exc:
             bad.append(f"{m['sender_name']}:{exc}")
-    record("V4 schema", len(agent_msgs) >= 3 and not bad,
-           f"{len(agent_msgs)} agent messages in handoff, {len(bad)} not strict BRv1" + (f" {bad[:2]}" if bad else ""))
+    risky = [f"{m['sender_name']}:{','.join(handoff.emoticon_risk(m['body']))}"
+             for m in agent_msgs if handoff.emoticon_risk(m["body"])]
+    old_form = handoff.PREFIX + json.dumps({"v": 1, "type": "case", "refs": []}, separators=(",", ":"))
+    control = handoff.emoticon_risk(old_form)  # the old plain-JSON form: must light, or a 0 means nothing
+    record("V4 schema", len(agent_msgs) >= 3 and not bad and not risky and bool(control),
+           f"{len(agent_msgs)} agent messages in handoff, {len(bad)} not strict BRv1, "
+           f"{len(risky)} at risk of emoticon rendering; control (old form) lights on {control or 'NOTHING'}"
+           + (f" {bad[:2]}" if bad else "") + (f" {risky[:2]}" if risky else ""))
 
     # V5: the coordinator, with its own key, against a private room; family read is the control
     priv = rooms[f"{patient}-papers"]["id"]

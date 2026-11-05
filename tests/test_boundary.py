@@ -26,7 +26,52 @@ CASE = {"v": 1, "type": "case", "case": "c0a1b2c3d", "replayed": True, "sheets":
 def test_valid_case_round_trips():
     gate = Gate.from_profile(PROFILE)
     body = handoff.encode(CASE, gate)
+    assert body.startswith("BRv1 `{") and body.endswith("}`")   # inline code: Mattermost leaves the JSON alone
     assert handoff.decode("@coordinator " + body) == CASE
+
+
+def test_old_form_still_decodes():
+    old = handoff.PREFIX + json.dumps(CASE, separators=(",", ":"))
+    assert "`" not in old
+    assert handoff.decode("@coordinator " + old) == CASE
+
+
+@pytest.mark.parametrize("body", [
+    "BRv1 `" + json.dumps(CASE),                       # opens a code span, never closes it
+    "BRv1 `` ",                                         # empty span
+    "BRv1 `not json`",
+])
+def test_unbalanced_or_broken_code_span_is_refused(body):
+    with pytest.raises(handoff.SchemaError):
+        handoff.decode(body)
+
+
+def test_backtick_in_a_value_is_refused():
+    for mutate in (lambda m: m["objections"][0].update(they_say="end the `span` early"),
+                   lambda m: m["findings"][0]["refs"][0].update(doc="S`1"),
+                   lambda m: m.update(note="`")):
+        m = json.loads(json.dumps(CASE))
+        mutate(m)
+        with pytest.raises(handoff.SchemaError):
+            handoff.validate(m)
+        with pytest.raises(handoff.SchemaError):
+            handoff.encode(m)
+    handoff.encode(CASE)  # control: the unmodified message encodes
+
+
+def test_emoticon_risk_lights_on_old_form_and_is_zero_on_new():
+    old = handoff.PREFIX + json.dumps(CASE, separators=(",", ":"))
+    new = handoff.encode(CASE)
+    assert ":[" in handoff.emoticon_risk(old)            # '"findings":[' is what Mattermost turned into a face
+    assert handoff.emoticon_risk("@reader " + new) == []
+    assert handoff.emoticon_risk("BRv1 `" + json.dumps({"a": ":( :D ;) :|"}) + "`") == []  # inside code: inert
+
+
+@pytest.mark.parametrize("trigger", [":[", ":(", ":)", ":D", ":P", ":o", ":/", ";)", ":|"])
+def test_emoticon_risk_finds_each_trigger_outside_code(trigger):
+    assert handoff.emoticon_risk(f"hello {trigger} world")
+    assert handoff.emoticon_risk(f"hello `{trigger}` world") == []
+    assert handoff.emoticon_risk(f"`a` x{trigger}y `b`")                       # between two spans: outside
 
 
 @pytest.mark.parametrize("mutate", [

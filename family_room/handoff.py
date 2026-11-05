@@ -1,6 +1,8 @@
 """The strict schema of the agents-only handoff room.
 
-Every handoff message is `BRv1 ` + one JSON object. Allowed: enums, integers (cents), ISO dates,
+Every handoff message is `BRv1 ` + one JSON object inside an inline-code span (backticks), because
+Mattermost turns character pairs such as `:[` inside plain JSON into emoticons. The old form without
+backticks still decodes. Allowed: enums, integers (cents), ISO dates,
 sheet/line references, letter kinds, source refs. The only sentences are BillRadar's prepared call
 answers (`they_say`, `answer`) and quotes from public sources (`quotes[].text`); @reader runs each one
 through its PII gate before posting. Anything else, including an unknown key, is refused on both
@@ -28,6 +30,10 @@ FACT_VALUES = {"income_band": {"under_200_fpl", "200_250_fpl", "250_300_fpl", "3
 STATES = {"approved", "declined", "expired", "shared"}
 ERRORS = {"no_case", "unknown_objection", "no_call_sheet", "not_sample_pack", "busy"}
 MAX_TEXT = 700
+# Character sequences Mattermost renders as emoticons (matched case-insensitively, outside code spans).
+EMOTICONS = [":[", ":(", ":)", ":d", ":p", ":o", ":/", ";)", ":|", ":-)", ":-(", ":-d", ":-p", ":-o", ":-/",
+             ":-|", ";-)", ":'("]
+CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1", re.S)
 
 
 class SchemaError(ValueError):
@@ -62,9 +68,23 @@ def _keys(d: dict, required: set[str], optional: set[str] = frozenset()) -> None
         raise SchemaError(f"keys: extra {sorted(extra)} missing {sorted(missing)}")
 
 
+def _no_backtick(v: Any) -> None:
+    """A backtick inside a value would end the inline-code span early and expose the rest."""
+    if isinstance(v, str):
+        if "`" in v:
+            raise SchemaError("backtick in a value")
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            _no_backtick(k); _no_backtick(x)
+    elif isinstance(v, list):
+        for x in v:
+            _no_backtick(x)
+
+
 def validate(m: dict) -> dict:
     if not isinstance(m, dict) or m.get("v") != 1:
         raise SchemaError("not BRv1")
+    _no_backtick(m)
     t = m.get("type")
     if t == "case":
         _keys(m, {"case", "replayed", "sheets", "total_cents", "apply_by", "findings", "letters",
@@ -156,22 +176,34 @@ def texts(m: dict) -> list[str]:
 
 
 def encode(m: dict, gate=None) -> str:
-    """Validate, run every sentence through the sender's gate, serialise."""
+    """Validate, run every sentence through the sender's gate, serialise as `BRv1 `{json}``."""
     validate(m)
     if gate is not None:
         for t in texts(m):
             gate.check(t)
         gate.check(json.dumps(m))  # numbers and ids as well: no long account-like digit runs
-    return PREFIX + json.dumps(m, separators=(",", ":"), ensure_ascii=False)
+    return PREFIX + "`" + json.dumps(m, separators=(",", ":"), ensure_ascii=False) + "`"
+
+
+def emoticon_risk(body: str) -> list[str]:
+    """Mattermost emoticon trigger sequences found outside inline-code spans (empty = nothing to render)."""
+    outside = CODE_SPAN.sub(" ", body or "").lower()
+    return [e for e in EMOTICONS if e in outside]
 
 
 def decode(body: str) -> dict:
-    """Parse a handoff body. `send_targeted_message` prepends `@name `, which is stripped."""
+    """Parse a handoff body: `BRv1 `{json}`` (current) or `BRv1 {json}` (old form). `send_targeted_message`
+    prepends `@name `, which is stripped."""
     body = re.sub(r"^(?:@[a-z0-9._-]+\s+)+", "", (body or "").strip())
     if not body.startswith(PREFIX):
         raise SchemaError("not a handoff message")
+    rest = body[len(PREFIX):].strip()
+    if rest.startswith("`"):
+        if len(rest) < 2 or not rest.endswith("`"):
+            raise SchemaError("unclosed code span")
+        rest = rest[1:-1]
     try:
-        m = json.loads(body[len(PREFIX):])
+        m = json.loads(rest)
     except ValueError as exc:
         raise SchemaError("not JSON") from exc
     return validate(m)

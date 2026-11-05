@@ -15,7 +15,10 @@ import secrets
 import threading
 import time
 import uuid
+from collections import deque
+from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Callable
 
 from family_room import handoff, state
 from family_room.engine import Engine, EngineError, match_pack, profile, sha256
@@ -25,6 +28,71 @@ from family_room.switch import Agent
 log = logging.getLogger("family_room.reader")
 
 LETTER_ORDER = ["application", "dispute", "itemized"]
+WINDOW_S = 120          # an album's files may precede the @reader message by this long
+BUFFER_MAX = 50         # unaddressed owner files kept per room
+NO_PAPERS = ("I see no papers from you in the last 2 minutes. Post photos or PDFs here as files and "
+             "mention @reader within 2 minutes.")
+TIME_KEYS = ("created_at", "timestamp", "ts", "sent_at", "occurred_at", "origin_server_ts")
+
+
+def event_time(ev: dict, p: dict, clock: Callable[[], float]) -> float:
+    """Seconds since the epoch: the event's own timestamp if it carries a readable one (payload first,
+    then the envelope; ISO text, epoch seconds or epoch milliseconds), else the receive time."""
+    for src in (p, ev):
+        for k in TIME_KEYS:
+            v = src.get(k)
+            if isinstance(v, bool) or v is None:
+                continue
+            if isinstance(v, (int, float)):
+                return v / 1000 if v > 1e11 else float(v)
+            if isinstance(v, str):
+                try:
+                    d = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+    return clock()
+
+
+class AlbumWindow:
+    """Telegram sends an album of N files as N messages with one attachment each, and the @reader
+    mention (if any) sits on the last one. Unaddressed files posted by a room's owner are kept here,
+    briefly, so the addressed message can pick them up. Owner identity = the event's `sender_name`
+    (the room owner's username, the same field the coordinator keys people on)."""
+
+    def __init__(self, window_s: float = WINDOW_S, maxlen: int = BUFFER_MAX):
+        self.window_s, self.maxlen = window_s, maxlen
+        self.rooms: dict[str, deque] = {}
+
+    @staticmethod
+    def is_owner(sender: str | None, owner: str) -> bool:
+        return bool(sender) and sender.lower() == owner.lower()
+
+    def add(self, room: str, owner: str, sender: str | None, files: list[dict], ts: float) -> bool:
+        if not files or not self.is_owner(sender, owner):
+            return False  # nobody else's files are ever kept
+        self.rooms.setdefault(room, deque(maxlen=self.maxlen)).append((ts, files))
+        return True
+
+    def take(self, room: str, owner: str, sender: str | None, own: list[dict], ts: float) -> list[dict]:
+        """The addressed message's own files plus the owner's buffered files from the previous
+        `window_s` seconds, deduplicated by mxc, oldest first. Consumed and stale entries are cleared."""
+        out: list[dict] = []
+        seen: set[str] = set()
+        if self.is_owner(sender, owner):
+            buf = self.rooms.pop(room, None) or ()
+            later = deque((t, f) for t, f in buf if t > ts)  # reordered stream: not part of this message
+            if later:
+                self.rooms[room] = deque(later, maxlen=self.maxlen)
+            for t, files in buf:
+                if ts - self.window_s <= t <= ts:
+                    for a in files:
+                        if a.get("mxc") not in seen:
+                            seen.add(a.get("mxc")); out.append(a)
+        for a in own:
+            if a.get("mxc") not in seen:
+                seen.add(a.get("mxc")); out.append(a)
+        return out
 
 
 def cents(amount: str | None) -> int | None:
@@ -45,7 +113,9 @@ def income_band(prof: dict) -> str:
 
 
 class Reader:
-    def __init__(self):
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self.clock = clock
+        self.window = AlbumWindow()
         st = state.load("reader")
         self.st = st
         self.agent = Agent(state.API, st["id"], st["api_key"], st["connection_id"], "reader")
@@ -65,14 +135,24 @@ class Reader:
         if kind != "message":
             return
         p, room = ev.get("payload") or {}, ev.get("room_id")
-        if not p.get("addressed") or p.get("sender_kind") == "platform":
+        if p.get("sender_kind") == "platform":
+            return
+        if room in self.private and not p.get("addressed"):
+            # an album member without the mention: keep the owner's files for the addressed message
+            with self.lock:
+                self.window.add(room, self.private[room], p.get("sender_name"),
+                                p.get("attachments") or [], event_time(ev, p, self.clock))
+            return
+        if not p.get("addressed"):
             return
         if room in self.private:
-            if p.get("attachments"):
-                threading.Thread(target=self.papers, args=(room, p), daemon=True).start()
+            with self.lock:
+                files = self.window.take(room, self.private[room], p.get("sender_name"),
+                                         p.get("attachments") or [], event_time(ev, p, self.clock))
+            if files:
+                self.run_async(self.papers, room, files)
             else:
-                self.agent.post(room, "Post photos or PDFs of your hospital papers here with @reader. "
-                                      "They stay in this room; only checked totals and codes leave it.")
+                self.agent.post(room, NO_PAPERS)
         elif room == self.handoff_room and p.get("sender_name") == self.coordinator:
             try:
                 msg = handoff.decode(p.get("body", ""))
@@ -81,10 +161,13 @@ class Reader:
                 return
             self.request(msg)
 
+    @staticmethod
+    def run_async(fn, *args) -> None:
+        threading.Thread(target=fn, args=args, daemon=True).start()
+
     # ── papers → case ────────────────────────────────────────────────────────
-    def papers(self, room: str, p: dict) -> None:
+    def papers(self, room: str, files: list[dict]) -> None:
         owner = self.private[room]
-        files = p["attachments"]
         hashes = set()
         for a in files:
             hashes.add(sha256(self.agent.media(room, a["mxc"])))
@@ -121,7 +204,7 @@ class Reader:
         total = cents(a["total_may_come_off"]) or 0
 
         # 1. what the owner sees, in the owner's own room (names are fine here: it is their room)
-        lines = [f"I read {len(files)} sheets ({'replayed fictional sample' if case['replayed'] else 'live reading'}, "
+        lines = [f"I read {len(files)} files ({'replayed fictional sample' if case['replayed'] else 'live reading'}, "
                  f"pack {pack}). {len(f['findings'])} findings, **{money(total)} may come off**."]
         if a.get("apply_by"):
             lines.append(f"Apply for the hospital's financial assistance by **{a['apply_by']}**.")

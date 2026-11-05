@@ -17,12 +17,46 @@ import time
 
 from family_room import state
 from family_room.engine import PACKS
-from family_room.switch import mattermost, mm_post, utcnow
+from family_room.switch import HttpError, gateway, mattermost, mm_post, utcnow
 
 PACK = os.environ.get("DEMO_PACK", "brs1-birth-all-errors")
 PATIENT = os.environ.get("PATIENT", "nadya")
 HELPER = os.environ.get("HELPER", "alex")
 REMINDER_WAIT = float(os.environ.get("REMINDER_AFTER_S", "60")) + 10
+LIVE_TIMEOUT = float(os.environ.get("AGENTS_LIVE_TIMEOUT_S", "90"))
+
+
+class AgentsNotLive(TimeoutError):
+    pass
+
+
+def wait_agents_live(get_room, expected: dict[str, dict[str, str]], timeout: float = LIVE_TIMEOUT,
+                     interval: float = 2.0, sleep=time.sleep, clock=time.monotonic) -> int:
+    """Poll Switch's room records until every expected agent shows "live" in its rooms.
+
+    `get_room(room_id)` returns the Gateway's room record (`agent_statuses`: agent id -> status);
+    `expected` is {room_id: {agent_id: agent name}}. Returns the number of polls; raises
+    AgentsNotLive naming what is still missing. (`make up && make demo` back to back lost the first
+    message because the reader's stream opened in the same second.)"""
+    end, polls, missing, last_err = clock() + timeout, 0, [], None
+    while True:
+        polls += 1
+        missing = []
+        for room_id, agents in expected.items():
+            try:
+                statuses = (get_room(room_id) or {}).get("agent_statuses") or {}
+            except HttpError as exc:
+                last_err = exc
+                statuses = {}
+            missing += [f"{name} in {room_id[:8]} ({statuses.get(aid, 'absent')})"
+                        for aid, name in agents.items() if statuses.get(aid) != "live"]
+        if not missing:
+            return polls
+        if clock() >= end:
+            raise AgentsNotLive(f"agents not live after {timeout:.0f} s: {'; '.join(missing)}"
+                                + (f" (last gateway error: {last_err})" if last_err else "")
+                                + ". Is `make agents` running?")
+        sleep(interval)
 
 
 class Story:
@@ -65,6 +99,18 @@ class Story:
                     found[m.group(2)] = m.group(1)
             time.sleep(1)
         return found
+
+    def agents_live(self) -> None:
+        """Do not post before both agents hold an open stream in the rooms the story uses."""
+        e = state.env_file()
+        gw = gateway(state.API, e["GATEWAY_ADMIN_EMAIL"], e["GATEWAY_ADMIN_PASSWORD"])
+        ids = {n: state.load(n)["id"] for n in ("reader", "coordinator")}
+        r, c = {ids["reader"]: "reader"}, {ids["coordinator"]: "coordinator"}
+        expected = {self.rooms[f"{who}-papers"]["id"]: r for who in {PATIENT, HELPER}}
+        expected[self.rooms["family"]["id"]] = c
+        expected[self.rooms["handoff"]["id"]] = {**r, **c}
+        n = wait_agents_live(lambda rid: gw.call("GET", f"/gateway/rooms/{rid}"), expected)
+        print(f"{utcnow()}  reader and coordinator live in {len(expected)} rooms (after {n} poll(s))")
 
     # ── steps ───────────────────────────────────────────────────────────────
     def papers(self) -> dict[str, str]:
@@ -129,6 +175,10 @@ def main() -> None:
         return
     if step != "all":
         raise SystemExit("steps other than 'all' and 'show' run inside the story; use 'all'")
+    try:
+        s.agents_live()
+    except AgentsNotLive as exc:
+        raise SystemExit(str(exc))
     start = int(time.time() * 1000)
     cards = s.papers()                       # 1. photos → reader → handoff → family summary
     s.approve(cards, r"dispute")             # 2. the patient approves a letter in their own room
