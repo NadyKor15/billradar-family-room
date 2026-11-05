@@ -60,8 +60,9 @@ class AlbumWindow:
     briefly, with their sender; the addressed message picks up the files of ITS OWN sender from the
     previous `window_s` seconds. Only the room's owner can address the reader there (Switch's
     addressing policy refuses anyone else), so these are the owner's files. Sender identity is the
-    event's `sender_name` as Switch delivers it: the Switch username on Mattermost, the platform name
-    on Telegram (e.g. NadyKor15, not "nadya"), which is why it is not compared with the owner name."""
+    event's `sender`: Switch's participant id `@<localpart>:<server>`, set by Switch, not the display
+    name (`sender_name` is a platform name a person can change, and on Telegram it is e.g. NadyKor15,
+    not "nadya"). An event without `sender` is never buffered."""
 
     def __init__(self, window_s: float = WINDOW_S, maxlen: int = BUFFER_MAX):
         self.window_s, self.maxlen = window_s, maxlen
@@ -158,14 +159,14 @@ class Reader:
         if room in self.private and not p.get("addressed"):
             # an album member without the mention: keep the owner's files for the addressed message
             with self.lock:
-                self.window.add(room, self.private[room], p.get("sender_name"),
+                self.window.add(room, self.private[room], p.get("sender"),
                                 p.get("attachments") or [], event_time(ev, p, self.clock))
             return
         if not p.get("addressed"):
             return
         if room in self.private:
             with self.lock:
-                files = self.window.take(room, self.private[room], p.get("sender_name"),
+                files = self.window.take(room, self.private[room], p.get("sender"),
                                          p.get("attachments") or [], event_time(ev, p, self.clock))
             if files:
                 self.run_async(self.papers, room, files)

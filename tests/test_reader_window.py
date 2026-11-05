@@ -40,7 +40,7 @@ def rd(monkeypatch):
 
 def msg(rd, who, n_files, *, addressed=False, ts=None, room=ROOM, start=0, extra=None):
     """A stream event: `n_files` attachments with mxc `mxc://f<start+i>`; `ts` as epoch seconds (None = no timestamp)."""
-    p = {"sender_name": who, "sender_kind": "user", "addressed": addressed,
+    p = {"sender": f"@sw_{who.lower()}:localhost", "sender_name": who, "sender_kind": "user", "addressed": addressed,
          "body": "@reader here" if addressed else "",
          "attachments": [{"mxc": f"mxc://f{start + i}"} for i in range(n_files)]}
     if ts is not None:
@@ -204,3 +204,10 @@ def test_someone_elses_fresh_files_stay_for_them(rd):
     assert rd.taken == [(ROOM, ["mxc://f0"])]
     msg(rd, "alex", 0, addressed=True, ts=T0 + 2)               # the other sender's files were not cleared
     assert rd.taken[-1] == (ROOM, ["mxc://f100", "mxc://f101"])
+
+
+def test_window_keys_on_switch_sender_id_not_on_the_display_name(rd):
+    # Someone renames themselves to Nadya's Telegram name: same sender_name, different Switch sender id.
+    msg(rd, "NadyKor15", 2, ts=T0, start=100, extra={"sender": "@sw_impostor:localhost"})
+    msg(rd, "NadyKor15", 1, addressed=True, ts=T0 + 1, start=0)
+    assert rd.taken == [(ROOM, ["mxc://f0"])]
