@@ -1,5 +1,7 @@
 # BillRadar Family Room
 
+[![clean clone](https://github.com/NadyKor15/billradar-family-room/actions/workflows/clean-clone.yml/badge.svg?branch=main)](https://github.com/NadyKor15/billradar-family-room/actions/workflows/clean-clone.yml)
+
 Built on [Switch](https://github.com/sandbox-quantum/switch).
 
 For the person who handles a family's hospital bills, and the relatives who sometimes help. That person keeps track of everyone's bills, insurance plans, deadlines and calls to the hospital. When relatives help, letters and photos of bills start going around in chats, and those hold names, account numbers and diagnoses.
@@ -29,6 +31,8 @@ make verify   # 8 checks, ends with "8/8 PASS"; each refusal check has a control
 make test     # 201 unit tests, no stand needed; the ones that use the engine skip until `make engine` has run
 make down     # stop everything (make wipe also drops the data)
 ```
+
+GitHub runs these same commands on a clean clone at every push (`.github/workflows/clean-clone.yml`), with no keys.
 
 Needs Docker with Compose, Python 3.12, make, git, curl, openssl and network access: `make up` pulls the images and downloads 14 public policy documents, and it stops if a download fails. The Mattermost image is amd64 only, so Apple Silicon runs it under emulation. Everything binds to 127.0.0.1 (ports: 38000 Switch API, 38030 Switch Gateway, 38065 Mattermost, 38432 Postgres). `make demo` plays Nadya and Alex through Mattermost's API. Open http://localhost:38065 to watch or to do the steps yourself; demo passwords are in `state/people.json`. The Gateway login is in `deploy/.env`.
 
