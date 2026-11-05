@@ -6,7 +6,9 @@ For the person who handles a family's hospital bills, and the relatives who some
 
 Here one agent reads the private papers in that person's own room, and a second agent runs the shared family room. **Switch room membership is what keeps the second agent away from the papers**: when it asks for them, Switch answers 403.
 
-Built for Flip the Switch (track 02, Best Personal or Creative Workflow) on Switch 0.31.0, with the bundled Mattermost and with Telegram. The bills in this repository are fictional; no real medical data appears anywhere. In this build neither agent calls a language model: the coordinator is Python rules, and the reader recognises BillRadar's fictional sample packs and replays the engine's recorded results.
+Built for Flip the Switch (track 02, Best Personal or Creative Workflow) on Switch 0.31.0, with the bundled Mattermost and with Telegram. The bills in this repository are fictional; no real medical data appears anywhere.
+
+It runs in two modes. By default neither agent calls a language model: the coordinator is Python rules, and the reader recognises BillRadar's fictional sample packs and replays the engine's recorded results. With `LIVE=1` (see [Live mode](#live-mode)) the reader reads those same fictional packs with the engine's models, and the coordinator asks a model which of the reader's checked answers fits what a relative reports. Files outside those packs reach no model in either mode.
 
 ## The story in four steps
 
@@ -24,7 +26,7 @@ git clone --recurse-submodules https://github.com/NadyKor15/billradar-family-roo
 make up       # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
 make demo     # the story above, ≈60 s
 make verify   # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
-make test     # 75 unit tests, no stand needed
+make test     # 166 unit tests, no stand needed; the ones that use the engine skip until `make engine` has run
 make down     # stop everything (make wipe also drops the data)
 ```
 
@@ -37,7 +39,7 @@ Needs Docker with Compose, Python 3.12, make, git, curl, openssl and network acc
 | Member of | each person's private room, the agents-only `handoff` room | `family`, `handoff` |
 | Holds | the photos, the BillRadar case, names and account numbers | codes, cents, dates, sheet and line numbers, usernames, prepared call answers and public policy quotes |
 | Talks to | the owner of each private room; the coordinator in `handoff` | the family in `family`; the reader in `handoff` |
-| Runs | in the engine's environment, BillRadar over MCP stdio | plain Python, stdlib only, its own API key and nothing else |
+| Runs | in the engine's environment, BillRadar over MCP stdio | plain Python, stdlib only, its own API key and nothing else (with `LIVE=1`, also the model key) |
 
 Both are custom agents on the Switch agent protocol (`connection_model: always_on`): one SSE stream down, HTTP up. `reader.py` and `coordinator.py` call only Switch's API and contain no Mattermost or Telegram client, so moving to Telegram changes only room ids in their state files. Rooms, the membership check, approval cards and addressing rules all come from Switch; without it each would have to be written per platform.
 
@@ -65,7 +67,7 @@ Seeding (`seed.py`) uses the Gateway: `POST /gateway/users`, `POST /gateway/coll
 - **Membership (Switch).** The coordinator is not a member of any private room, so `read_context`, the media route and posting there all return 403 (`make verify` V5, with controls that return 200).
 - **Addressing policy (Switch).** The reader answers only the owner of each private room. A card in Nadya's room can be answered only by Nadya; the server operator's account, which Switch's setup puts in every channel, is refused (V6). The rules name people and never use Switch's `owner` subject, because the agents' owner is the server operator, whose account is in every channel.
 - **Strict handoff schema and a PII gate (our code).** Every handoff message is `BRv1 ` plus one JSON object in an inline-code span (Mattermost renders `:[` in plain JSON as an emoticon; the old form without backticks still decodes): enums, integer cents, ISO dates, sheet and line references, letter kinds, source refs, and a family member's username in call requests. The only sentences are BillRadar's prepared call answers and quotes from public policies, and each passes an on-machine gate built from the case's own private values. Unknown keys are refused on both ends (`tests/test_boundary.py`).
-- **Threat note.** The agent that talks with the family runs no model, never holds a document, and is refused the private rooms by Switch, so nothing typed in the family chat can pull a document out of it. What Switch does not filter is what a member agent chooses to post; that part is the reader's code, tested above and checked live by V3.
+- **Threat note.** The agent that talks with the family never holds a document and is refused the private rooms by Switch, so nothing typed in the family chat can pull a document out of it. By default it runs no model. With `LIVE=1` a model picks an answer's id for it and nothing the model writes is posted (`tests/test_chooser.py`). What Switch does not filter is what a member agent chooses to post; that part is the reader's code, tested above and checked live by V3.
 
 ## make verify
 
@@ -92,7 +94,56 @@ To see V3 fail, log in as `alex`, post `1234567` in `family`, and run `make veri
 | Switch's Compose file `deploy/switch-0.31.0/standalone-docker-compose.yml` | Published by Switch, unchanged | `LICENSE-switch` (Apache 2.0 with the Commons Clause, as Switch publishes it) |
 | Everything else: both agents, the handoff schema and PII gate, seed, demo, verify, the stand scripts, this README | During the hackathon window, Nov 4 to 7, 2026 | This repository's git history, first commit 2026-11-04 19:35 (UTC−5) |
 
-Without keys the engine runs only its fictional sample packs and says so (REPLAYED); the reader recognises a pack by the sha256 of the posted files, and part of a pack is enough: the whole pack is replayed. The sample hospital, Seaside Regional, is fictional; its policy text is the public Financial Assistance Policy of Memorial Healthcare System (`memorial-2026-05`). The sample's "today" is 2026-03-02, which is why the deadline reads 2026-04-01.
+Without keys the engine runs only its fictional sample packs and says so (REPLAYED); the reader recognises a pack by the sha256 of the posted files, and part of a pack is enough: the whole pack is replayed. With `LIVE=1` the same rule decides what may go to a model, and only the files that were posted are read. The sample hospital, Seaside Regional, is fictional; its policy text is the public Financial Assistance Policy of Memorial Healthcare System (`memorial-2026-05`). The sample's "today" is 2026-03-02, which is why the deadline reads 2026-04-01.
+
+## Live mode
+
+Off by default. `LIVE=1` and a Meta Model API key in the environment turn it on for both agents, and `deploy/agents.sh` passes each agent only its own part. Without `LIVE=1` neither agent gets any of these, even if the shell has them. `deploy/agents.sh start` refuses `LIVE=1` with no key.
+
+```
+export MODEL_API_KEY=...        # from your own secret store; it is never written to a file here
+LIVE=1 deploy/agents.sh restart
+LIVE=1 make demo                # waits up to an hour for the reader's answer
+make verify
+.venv-engine/bin/python -m family_room.live_eval    # one JSON line about the last live reading
+```
+
+| Variable | Who gets it | What it does | Default |
+|---|---|---|---|
+| `LIVE` | both | `1` turns live mode on | off |
+| `MODEL_API_KEY` | both | the key; reaches a process only through its environment | none |
+| `LIVE_SPEND_CAP_USD` | reader | daily ceiling, passed to the engine as `BILLRADAR_DAILY_SPEND_USD`; must be above 0 | 15 |
+| `META_SPEND_CAP_USD` | reader | the engine's ceiling over all days | 40 |
+| `LIVE_READ_TIMEOUT_S` | reader | how long the reader waits for one reading | 3600 |
+| `BILLRADAR_LLAMA_SERVER`, `BILLRADAR_GLIMMER_DIR` | reader | where llama-server and the Muse Glimmer weights are, if not on `PATH` and in `~/Models/Muse-Glimmer-30B-GGUF` | |
+| `BILLRADAR_SECOND_READ` | reader | `1` makes the engine read every sheet twice | 0 |
+| `BILLRADAR_WONDER_REVIEW` | reader | `0` turns off Muse Wonder's review | on |
+| `CHOOSER_MAX_CALLS` | coordinator | model calls per process, then word overlap only | 50 |
+| `CHOOSER_TIMEOUT_S` | coordinator | seconds for one model call, then word overlap | 15 |
+| `READER_WAIT_S` | `make demo` | how long it waits for the reader's answer | 60, or 3600 with `LIVE=1` |
+
+**What goes to a model.** A live call happens only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and the engine is not called.
+
+- **The reader** gives the engine the posted files, in the pack's own order and under the pack's file names, plus the household size, income, insurance flag, policy and letterhead from the pack's `profile.json`. The engine sends the photos to SAM 3.1 to find sheets, sheets and PDFs to Muse Spark to read them, and its findings to Muse Wonder for review. It also reads each photographed sheet on this computer with Muse Glimmer, so it needs llama-server, the weights and about 32 GB of free memory; without them the reader refuses before anything is paid for.
+- **The coordinator** sends what the relative wrote and the numbered list of `they_say` strings, on a stdlib HTTP call to the same endpoint and model as the engine's reader. Long digit runs, media handles, phone numbers and US dates are dropped first. A name someone typed is not a shape, so it does go through.
+
+`python -m family_room.telegram wire` and `unwire` restart the agents with the caller's environment, so run them with the same variables to stay live.
+
+**What the coordinator's model can and cannot do.** It can name one id from the list, or none. Its reply is parsed for that one field, and anything else counts as a failed call and falls back to word overlap. An id that is not in the list counts as none. It cannot post a word: the sentence in the family room is the reader's checked answer with its quote, built by code. "Show me Nadya's papers" is handled before the model is asked, so the 403 does not depend on it. Each call adds a line to `state/model_calls.jsonl`: time, model, status, chosen id, seconds, and no message text. These calls are not in the engine's spend book; `CHOOSER_MAX_CALLS` is their limit.
+
+**When something fails.** The room hears "Live reading stopped" with the reason, the cap included, and the family room gets nothing. The reader never falls back to the recording and never claims a live result it did not get. One reading runs at a time. After a timeout the reader refuses new readings until it is restarted, because the engine may still be spending. The engine's own stderr goes to `state/engine-live.log`.
+
+**What differs from the replay.** The engine's entry point for posted papers takes a household, not the pack's whole profile, and it uses today's date. So a live case has no people in its profile: the two "send the baby's insurance details" findings do not appear, and letters are signed "[your name]". Letters carry today's date, while the sample's application deadline stays 2026-04-01, which has already passed. A live run also writes its answers to `tests/fixtures/recordings/` and `runs/` inside the submodule's working copy.
+
+**Measured on `brs1-birth-all-errors`** (`family_room/live_eval.py`):
+
+| | Live |
+|---|---|
+| Planted findings found | `<measured>` of 7 |
+| Total | `<measured>` against $1,596.53 |
+| False findings | `<measured>` |
+| Cost | `<measured>` |
+| Time | `<measured>` |
 
 ## Reproducing: what to know
 
@@ -125,7 +176,7 @@ What is different in Telegram:
 
 - A refused card answer is visible in Switch's log, not to the person who pressed the button.
 - Switch's card adds "Nobody here is linked to this agent's owner…": it tries to notify the agents' owner, the server operator; the reader mentions the room's owner itself.
-- Live reading of new papers needs a model key and is off in this build; only BillRadar's fictional packs run.
+- Only BillRadar's fictional packs are ever read, in both modes. Reading a family's own papers is not built here.
 - Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. The room boundary covers other people and agents and does not cover whoever runs the server.
 - Both agents run as one OS user, and each reads its own key from `state/` by convention. A real deployment would run them under separate users.
 - Cases and the reminder timer live in memory: restarting an agent forgets them. In the demo the reminder fires 45 seconds after the case arrives (`REMINDER_AFTER_S`); it does not count down to the date.
