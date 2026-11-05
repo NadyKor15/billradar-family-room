@@ -1,0 +1,3 @@
+[submodule "vendor/billradar-meta"]
+	path = vendor/billradar-meta
+	url = https://github.com/NadyKor15/billradar-meta.git
