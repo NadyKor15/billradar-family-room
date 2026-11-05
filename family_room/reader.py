@@ -14,6 +14,7 @@ Run: python -m family_room.reader   (reads state/reader.json only)
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import secrets
@@ -47,6 +48,10 @@ LIVE_STOP_WORDS = {
     "timeout": "no result in time, so the reading was stopped.",
 }
 LIVE_STOP_OTHER = "the reading failed; the reader's log has it."
+# The hospital's financial assistance form, by policy: the same table as the engine's app.FORM_FOR_POLICY
+# (tests/test_application_files.py checks they agree). A policy without a form gets the report only.
+FORM_FILLERS = {"memorial-2026-05": "fill_memorial"}
+FORM_FILE, REPORT_FILE = "financial-assistance-form.pdf", "billradar-case-report.pdf"
 TIME_KEYS = ("created_at", "timestamp", "ts", "sent_at", "occurred_at", "origin_server_ts")
 
 
@@ -144,6 +149,26 @@ def income_band(prof: dict) -> str:
         if pct <= limit:
             return band
     return "over_400_fpl"
+
+
+class NoForm(Exception):
+    """The case's hospital policy has no form BillRadar can fill in."""
+
+
+def application_line(made: dict[str, bool]) -> str:
+    """The one line that follows the owner's files. `made`: form and report, True when sent."""
+    sends_nothing = "BillRadar sends nothing"
+    if made["form"] and made["report"]:
+        return ("Here are the hospital's financial assistance form, filled in from this case, and the case report. "
+                f"{sends_nothing}: you sign the form and send it yourself.")
+    if made["form"]:
+        return ("Here is the hospital's financial assistance form, filled in from this case. I could not make the case "
+                f"report; the reader's log has it. {sends_nothing}: you sign the form and send it yourself.")
+    if made["report"]:
+        return ("Here is the case report. I could not make the hospital's financial assistance form filled in; "
+                f"the reader's log has it. {sends_nothing}.")
+    return ("I could not make the filled-in financial assistance form or the case report; the reader's log has it. "
+            f"The letter is approved as above. {sends_nothing}.")
 
 
 class Reader:
@@ -407,6 +432,8 @@ class Reader:
                             + ("Print, sign and send it yourself; BillRadar sends nothing." if ok else ""))
             self.handoff({"v": 1, "type": "approval", "case": case["ref"], "letter": arg, "state": state_word},
                          case["gate"])
+            if ok and arg == "application":  # after the handoff, so nothing here can lose the approval
+                self.run_async(self.send_application_files, case)
         elif kind == "fact":
             band = case.pop("pending_fact", None)
             self.handoff({"v": 1, "type": "fact", "case": case["ref"], "fact": arg,
@@ -417,6 +444,43 @@ class Reader:
                 self.agent.post(self.room_of[arg], self.call_sheet_text(case))
             self.handoff({"v": 1, "type": "call_auth", "case": case["ref"], "who": arg, "state": state_word},
                          case["gate"])
+
+    # ── the application's papers, in the owner's room only ──────────────────
+    def build_form(self, engine_id: str) -> bytes:
+        """The hospital's form filled in from the finished case (replayed or live: both leave case.json in the
+        engine's runs). Calls the engine's own functions in this process; nothing in the engine is changed."""
+        from billradar import agent_api, forms
+        _, c, _, _ = agent_api._load(engine_id)
+        filler = FORM_FILLERS.get(c.policy_id)
+        if filler is None:
+            raise NoForm(c.policy_id)
+        return self.pdf_bytes(getattr(forms, filler)(c).pdf)
+
+    def build_report(self, engine_id: str) -> bytes:
+        """The case report, from the engine's MCP tool."""
+        return self.pdf_bytes(base64.b64decode(self.engine.call("get_report_pdf", case_id=engine_id)["base64"], validate=True))
+
+    @staticmethod
+    def pdf_bytes(data: bytes) -> bytes:
+        if not data.startswith(b"%PDF-"):
+            raise ValueError("not a PDF")
+        return data
+
+    def send_application_files(self, case: dict) -> None:
+        """After the owner's yes to the application letter: the filled form and the case report, into her room and
+        no other, then one line. Each file stands alone; a failure is said and logged and never reaches the approval."""
+        try:
+            made = {}
+            for what, name, build in (("form", FORM_FILE, self.build_form), ("report", REPORT_FILE, self.build_report)):
+                try:
+                    self.agent.upload(case["room"], name, build(case["engine_id"]), "application/pdf")
+                    made[what] = True
+                except Exception:  # noqa: BLE001 - said in the room below
+                    log.exception("the %s for case %s could not be made or sent", what, case["ref"])
+                    made[what] = False
+            self.agent.post(case["room"], application_line(made))
+        except Exception:  # noqa: BLE001 - the approval and the handoff are already done
+            log.exception("application files for case %s", case["ref"])
 
     def call_sheet_text(self, case: dict) -> str:
         s = case["sheet"]
