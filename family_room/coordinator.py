@@ -1,8 +1,8 @@
 """@coordinator: runs the family room and never holds a document.
 
 Member of the family room and the agents-only handoff room only. It learns a case from @reader's
-strict handoff messages (codes, cents, dates, sheet/line references), gives each person a job by
-@-mention, keeps its own clock for reminders (Switch has no scheduler), and relays call help.
+strict handoff messages (codes, cents, dates, sheet/line references), posts the result in the family room,
+asks about a helper only through the owner, keeps its own clock for reminders (Switch has no scheduler), and relays call help.
 Ask it for someone's papers and it tries, on screen: Switch refuses, because it is not a member.
 
 Run: python -m family_room.coordinator   (reads state/coordinator.json only; stdlib only)

@@ -1,7 +1,7 @@
 """`make verify`: checks that each claim holds on the running stack, each negative next to a control
 that has to succeed (a check that cannot fail proves nothing).
 
-  V1 rooms      the chat-facing agent is not a member of any private room (Switch's room records)
+  V1 rooms      each room holds exactly the agents and people it should (Switch's room records)
   V2 canary     the scanner finds a planted private value in a control room (must light)
   V3 no leaks   0 private values, account-like numbers or media handles in the family and handoff rooms
   V4 schema     every agent message in the handoff room parses as strict BRv1, and none can render as
@@ -9,7 +9,7 @@ that has to succeed (a check that cannot fail proves nothing).
   V5 refusal    coordinator's own key: private room read/post/media -> 403; family read -> 200 (control)
   V6 policy     a card in the patient's room: the operator account's answer is refused,
                 the patient's answer on the same card is accepted (control)
-  V7 approvals  Switch's activity log records who approved what and when
+  V7 approvals  Switch's outcomes, as the reader saved them, record who approved what and when
   V8 reminder   the coordinator's own timer posted in the family room
 
 Exit code 1 on any FAIL. Run after `make demo`: python -m family_room.verify

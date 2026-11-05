@@ -6,7 +6,7 @@ backticks still decodes. Allowed: enums, integers (cents), ISO dates,
 sheet/line references, letter kinds, source refs. The only sentences are BillRadar's prepared call
 answers (`they_say`, `answer`) and quotes from public sources (`quotes[].text`); @reader runs each one
 through its PII gate before posting. Anything else, including an unknown key, is refused on both
-ends. There is no field for a name, a member or account number, an address or a media handle.
+ends. There is no field for a patient name, a member or account number, an address or a media handle; a family member's username appears only in call requests.
 """
 from __future__ import annotations
 

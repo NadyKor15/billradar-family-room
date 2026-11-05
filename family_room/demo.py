@@ -5,7 +5,7 @@ agents' real answers. Approval cards are answered with Switch's text form ("A1 1
 same cards are tapped. No API keys: the engine replays its fictional sample pack.
 
   python -m family_room.demo            whole story
-  python -m family_room.demo papers     one step (papers | call | ask | refuse | approve | show)
+  python -m family_room.demo show       what each room holds now
 """
 from __future__ import annotations
 
