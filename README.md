@@ -4,6 +4,15 @@ A family settles a hospital bill together in their group chat. One agent reads t
 
 Built for Flip the Switch (track 02, Best Personal or Creative Workflow) on Switch 0.31.0 with the bundled Mattermost. The bills in this repository are fictional; no real medical data appears anywhere.
 
+## The story in four steps
+
+1. Nadya posts 10 photos of the hospital papers in her own room. The reader reports 7 findings: $1,596.53 may come off.
+2. The reader passes the case to the coordinator without names or account numbers, and the coordinator tells the family who does what.
+3. In her own room, Nadya answers cards that only she can answer: the letters, one fact to share, and whether Alex may call.
+4. On hold with billing, Alex types what billing says, and the hospital's own policy line comes back.
+
+After that the coordinator posts its own deadline reminder, and `make verify` checks that nothing private reached the family room.
+
 ## Run it (no API keys)
 
 ```
@@ -28,18 +37,18 @@ Both are custom agents on the Switch agent protocol (`connection_model: always_o
 
 ## The workflow, step by step
 
-| # | What the family sees | Switch primitive | File | Call |
-|---|---|---|---|---|
-| 1 | Nadya posts 10 photos and PDFs with "@reader" in her own room | attachments on an addressed message; media route | `reader.py` `papers()` | SSE `message.attachments[]` → `GET /agents/{id}/rooms/{room}/media?mxc=…` |
-| 2 | Reader answers in her room: 7 findings, $1,596.53 may come off | agent message | `reader.py` | `POST /agents/{id}/message` |
-| 3 | Reader hands a de-identified case to the coordinator | agent-to-agent addressed message in an agents-only room | `handoff.py`, `reader.py` | `connect_to_room` + `send_targeted_message` |
-| 4 | Coordinator gives each person a job in the family room | @-addressing people | `coordinator.py` `case_posted()` | `POST /agents/{id}/message` |
-| 5 | Letters wait for Nadya's OK as cards in **her** room | approval cards; addressing policy decides who may answer | `reader.py` `card()` | `POST /agent-sessions/{sid}/approvals`, `GET /agent-sessions/approvals/outcomes` |
-| 6 | "Share one fact with the family?" (income band, no amount) | approval card as consent | `reader.py` `request()` | same |
-| 7 | "Let Alex talk to billing for you?" → the call sheet appears in Alex's own room | consent card; the reader moves private data only between private rooms | `reader.py` `answered()` | same + `POST /agents/{id}/message` |
-| 8 | On hold, Alex writes "@coordinator they say the discount is only for uninsured patients" → the hospital's own policy line comes back | round trip coordinator → reader → coordinator in `handoff` | `coordinator.py` `from_person()` | `send_targeted_message` both ways |
-| 9 | "Show me Nadya's papers" → the coordinator tries with its own key, Switch says 403 | room membership enforced by the server | `coordinator.py` `try_private()` | `POST /agents/{id}/ops/read_context` |
-| 10 | "⏰ Reminder: the financial assistance application is due 2026-04-01 and isn't approved yet" | Switch has no scheduler, so the coordinator keeps its own clock | `coordinator.py` `remind()` | `POST /agents/{id}/message` |
+| # | Story step | What the family sees | Switch primitive | File | Call |
+|---|---|---|---|---|---|
+| 1 | 1 | Nadya posts 10 photos and PDFs with "@reader" in her own room | attachments on an addressed message; media route | `reader.py` `papers()` | SSE `message.attachments[]` → `GET /agents/{id}/rooms/{room}/media?mxc=…` |
+| 2 | 1 | Reader answers in her room: 7 findings, $1,596.53 may come off | agent message | `reader.py` | `POST /agents/{id}/message` |
+| 3 | 2 | Reader hands a de-identified case to the coordinator | agent-to-agent addressed message in an agents-only room | `handoff.py`, `reader.py` | `connect_to_room` + `send_targeted_message` |
+| 4 | 2 | Coordinator gives each person a job in the family room | @-addressing people | `coordinator.py` `case_posted()` | `POST /agents/{id}/message` |
+| 5 | 3 | Letters wait for Nadya's OK as cards in **her** room | approval cards; addressing policy decides who may answer | `reader.py` `card()` | `POST /agent-sessions/{sid}/approvals`, `GET /agent-sessions/approvals/outcomes` |
+| 6 | 3 | "Share one fact with the family?" (income band, no amount) | approval card as consent | `reader.py` `request()` | same |
+| 7 | 3 | "Let Alex talk to billing for you?" → the call sheet appears in Alex's own room | consent card; the reader moves private data only between private rooms | `reader.py` `answered()` | same + `POST /agents/{id}/message` |
+| 8 | 4 | On hold, Alex writes "@coordinator they say the discount is only for uninsured patients" → the hospital's own policy line comes back | round trip coordinator → reader → coordinator in `handoff` | `coordinator.py` `from_person()` | `send_targeted_message` both ways |
+| 9 | after | "Show me Nadya's papers" → the coordinator tries with its own key, Switch says 403 | room membership enforced by the server | `coordinator.py` `try_private()` | `POST /agents/{id}/ops/read_context` |
+| 10 | after | "⏰ Reminder: the financial assistance application is due 2026-04-01 and isn't approved yet" | Switch has no scheduler, so the coordinator keeps its own clock | `coordinator.py` `remind()` | `POST /agents/{id}/message` |
 
 Seeding (`seed.py`) uses the Gateway: `POST /gateway/users`, `POST /gateway/collaborations/{bridge}/identities` (links each Mattermost account to a Switch user), `POST /gateway/rooms`, `PUT /gateway/agents/{id}/addressing-policy`.
 
@@ -65,11 +74,25 @@ Seeding (`seed.py`) uses the Gateway: `POST /gateway/users`, `POST /gateway/coll
 
 A planted leak in the family room turns V3 red; that run is recorded in the project notes.
 
+`make verify` uses a third agent, `auditor`. It is a member of `family`, `handoff` and its own `canary-control` room, nobody can address it, and it scans the shared rooms with `read_context`. It posts only the planted canary, and only in `canary-control`.
+
 ## What is reused and what is new
 
-- **Reused, unchanged:** the BillRadar engine by the same author ([NadyKor15/billradar-meta](https://github.com/NadyKor15/billradar-meta)), a git submodule pinned at `b20aeb9` and called over its MCP stdio server. Without keys it runs only its fictional sample packs and says so (REPLAYED); the reader recognises a pack by the sha256 of the posted files.
-- **Built during the hackathon window (04.11–07.11):** everything in this repository: both agents, the handoff schema and gate, seed, demo, verify, the Switch stand script.
-- `deploy/switch-0.31.0/standalone-docker-compose.yml` is Switch's own published Compose file (Apache-2.0, `LICENSE-switch`), unchanged.
+| Part | When it was made | Evidence |
+|---|---|---|
+| BillRadar engine (`vendor/billradar-meta`, git submodule pinned at `b20aeb9`, same author) | Before this repository, for another project. Used here unchanged, as a library over its MCP stdio server | Its own public history: 10 commits, 2026-11-03 13:20 to 22:08 (UTC−5). It contains no Switch code |
+| Switch's Compose file `deploy/switch-0.31.0/standalone-docker-compose.yml` | Published by Switch, unchanged | `LICENSE-switch` (Apache-2.0) |
+| Everything else: both agents, the handoff schema and PII gate, seed, demo, verify, the stand scripts, this README | During the hackathon window, Nov 4 to 7, 2026 | This repository's git history, first commit 2026-11-04 19:35 (UTC−5) |
+
+Without keys the engine runs only its fictional sample packs and says so (REPLAYED); the reader recognises a pack by the sha256 of the posted files.
+
+## Reproducing: what to know
+
+- Switch is pinned to 0.31.0 (`SWITCH_VERSION` in `deploy/.env`). Other versions are untested.
+- The Mattermost image is amd64 only. On Apple Silicon, Docker runs it under emulation, so the first start is slow.
+- `deploy/stand.sh init-env` (run by `make up`) writes `deploy/.env` with fresh secrets, including `CONTROLLER_TOKEN_SECRET`. The file is created with mode 0600 and stays on your machine.
+- `seed.py` links each Mattermost account to a Switch user before the agents start (`POST /gateway/collaborations/{bridge}/identities`). Addressing rules name people by that link, so the link has to exist first.
+- A newly registered Switch agent answers only its owner (Switch docs, identity-and-access, "Precedence"). `seed.py` sets the rules for both agents: the reader answers the owner of each private room and the coordinator in `handoff`; the coordinator answers the family in `family` and the reader in `handoff`.
 
 ## Known limits
 
