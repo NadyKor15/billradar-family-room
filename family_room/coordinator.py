@@ -147,10 +147,10 @@ class Coordinator:
             lines.append(f"- {TITLES.get(f['code'], f['code'])}{amt} ({where(f['refs'])})")
         if m["apply_by"]:
             lines.append(f"Apply for financial assistance by **{m['apply_by']}**.")
-        lines.append(f"Jobs: @{self.owner} — the letters are waiting for your OK in your own room "
+        lines.append(f"@{self.owner} — the letters are waiting for your OK in your own room "
                      "(only you can approve them).")
         for o in others:
-            lines.append(f"@{o} — you could call the billing office; I'm asking {self.owner.capitalize()} "
+            lines.append(f"@{o} — if you can help with the call to billing, I'm asking {self.owner.capitalize()} "
                          "whether you may.")
         lines.append("I only see codes, sums, dates and sheet numbers. Names and account numbers stay in "
                      f"{self.owner.capitalize()}'s room.")
