@@ -176,3 +176,13 @@ def test_reply_counts_files_not_sheets(rd, monkeypatch):
     first = rd.agent.posts[0][1]
     assert first.startswith("I read 10 files (replayed fictional sample, pack brs1-birth-all-errors).")
     assert "sheets" not in first.split("\n")[0]
+
+
+def test_case_ref_never_trips_the_gate_it_travels_through(monkeypatch):
+    draws = iter(["12345678", "00000000", "abcdef01"])          # the first two hold 7+ digit runs
+    monkeypatch.setattr(R.secrets, "token_hex", lambda n: next(draws))
+    assert R.new_ref() == "cabcdef01"
+    from family_room.pii import Gate
+    for _ in range(300):                                          # and for real random draws, never blocked
+        monkeypatch.undo()
+        Gate().check(R.new_ref())

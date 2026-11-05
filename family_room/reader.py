@@ -22,7 +22,7 @@ from typing import Callable
 
 from family_room import handoff, state
 from family_room.engine import Engine, EngineError, match_pack, profile, sha256
-from family_room.pii import Gate, PrivacyError
+from family_room.pii import LONG_DIGITS, Gate, PrivacyError
 from family_room.switch import Agent
 
 log = logging.getLogger("family_room.reader")
@@ -93,6 +93,15 @@ class AlbumWindow:
             if a.get("mxc") not in seen:
                 seen.add(a.get("mxc")); out.append(a)
         return out
+
+
+def new_ref() -> str:
+    """A case ref `c` + 8 hex digits that the PII gate will not mistake for an account number
+    (about 1 random ref in 20 holds a run of 7+ decimal digits and would block its own handoff)."""
+    while True:
+        ref = "c" + secrets.token_hex(4)
+        if not LONG_DIGITS.search(ref):
+            return ref
 
 
 def cents(amount: str | None) -> int | None:
@@ -187,7 +196,7 @@ class Reader:
             sheet = None
         prof = profile(pack)
         gate = Gate.from_profile(prof)
-        ref = "c" + secrets.token_hex(4)
+        ref = new_ref()
         objections = []
         for i, o in enumerate((sheet or {}).get("objections", []), 1):
             try:
