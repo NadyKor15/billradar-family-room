@@ -1,0 +1,75 @@
+{
+ "pack_id": "brs1-birth-all-errors",
+ "split": "work",
+ "items": [
+  {
+   "cls": "F1",
+   "sheets": [
+    "D1",
+    "D2"
+   ],
+   "amount": "1399.71",
+   "deadline": null,
+   "note": "212.3% of the 2026 guideline; no assistance line on the hospital papers"
+  },
+  {
+   "cls": "F2",
+   "sheets": [
+    "D1",
+    "D2"
+   ],
+   "amount": null,
+   "deadline": "2026-04-01",
+   "note": "latest of service + 365 days, last insurance payment + 12 months, first statement + 240 days"
+  },
+  {
+   "cls": "E2",
+   "sheets": [
+    "S10",
+    "S1"
+   ],
+   "amount": "196.82",
+   "deadline": null,
+   "note": "01960 twice, same date and amount; the second co-insurance is the overcharge"
+  },
+  {
+   "cls": "B1",
+   "sheets": [
+    "S2",
+    "S14"
+   ],
+   "amount": null,
+   "deadline": null,
+   "note": "newborn care filed on the mother's member ID (A27 denials); the doctors' letter asks $275.00 within 30 days of 2025-04-01"
+  },
+  {
+   "cls": "E3",
+   "sheets": [
+    "S12"
+   ],
+   "amount": "40.00",
+   "deadline": null,
+   "note": "co-pay overpaid at the office; credit in brackets added into the total"
+  },
+  {
+   "cls": "E4",
+   "sheets": [
+    "S13"
+   ],
+   "amount": null,
+   "deadline": null,
+   "note": "'Your Balance Due ... $0.00' and PAY THIS AMOUNT $719.03 on one sheet"
+  },
+  {
+   "cls": "P1",
+   "sheets": [
+    "S1",
+    "S2",
+    "S3"
+   ],
+   "amount": null,
+   "deadline": null,
+   "note": "EOB page(s) [3] of 4 not in the pack"
+  }
+ ]
+}
