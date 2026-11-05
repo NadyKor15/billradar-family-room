@@ -56,39 +56,48 @@ def event_time(ev: dict, p: dict, clock: Callable[[], float]) -> float:
 
 class AlbumWindow:
     """Telegram sends an album of N files as N messages with one attachment each, and the @reader
-    mention (if any) sits on the last one. Unaddressed files posted by a room's owner are kept here,
-    briefly, so the addressed message can pick them up. Owner identity = the event's `sender_name`
-    (the room owner's username, the same field the coordinator keys people on)."""
+    mention (if any) sits on the last one. Unaddressed files posted in a private room are kept here,
+    briefly, with their sender; the addressed message picks up the files of ITS OWN sender from the
+    previous `window_s` seconds. Only the room's owner can address the reader there (Switch's
+    addressing policy refuses anyone else), so these are the owner's files. Sender identity is the
+    event's `sender_name` as Switch delivers it: the Switch username on Mattermost, the platform name
+    on Telegram (e.g. NadyKor15, not "nadya"), which is why it is not compared with the owner name."""
 
     def __init__(self, window_s: float = WINDOW_S, maxlen: int = BUFFER_MAX):
         self.window_s, self.maxlen = window_s, maxlen
         self.rooms: dict[str, deque] = {}
 
     @staticmethod
-    def is_owner(sender: str | None, owner: str) -> bool:
-        return bool(sender) and sender.lower() == owner.lower()
+    def _key(sender: str | None) -> str:
+        return (sender or "").strip().lower()
 
     def add(self, room: str, owner: str, sender: str | None, files: list[dict], ts: float) -> bool:
-        if not files or not self.is_owner(sender, owner):
-            return False  # nobody else's files are ever kept
-        self.rooms.setdefault(room, deque(maxlen=self.maxlen)).append((ts, files))
+        if not files or not self._key(sender):
+            return False
+        self.rooms.setdefault(room, deque(maxlen=self.maxlen)).append((ts, self._key(sender), files))
         return True
 
     def take(self, room: str, owner: str, sender: str | None, own: list[dict], ts: float) -> list[dict]:
-        """The addressed message's own files plus the owner's buffered files from the previous
-        `window_s` seconds, deduplicated by mxc, oldest first. Consumed and stale entries are cleared."""
+        """The addressed message's own files plus the same sender's buffered files from the previous
+        `window_s` seconds, deduplicated by mxc, oldest first. Consumed and stale entries are cleared;
+        anyone else's recent entries stay."""
         out: list[dict] = []
         seen: set[str] = set()
-        if self.is_owner(sender, owner):
-            buf = self.rooms.pop(room, None) or ()
-            later = deque((t, f) for t, f in buf if t > ts)  # reordered stream: not part of this message
-            if later:
-                self.rooms[room] = deque(later, maxlen=self.maxlen)
-            for t, files in buf:
-                if ts - self.window_s <= t <= ts:
-                    for a in files:
-                        if a.get("mxc") not in seen:
-                            seen.add(a.get("mxc")); out.append(a)
+        who = self._key(sender)
+        keep = deque(maxlen=self.maxlen)
+        for t, s, files in self.rooms.pop(room, None) or ():
+            if t > ts:  # reordered stream: not part of this message
+                keep.append((t, s, files))
+            elif t < ts - self.window_s:
+                continue  # stale: dropped
+            elif who and s == who:
+                for a in files:
+                    if a.get("mxc") not in seen:
+                        seen.add(a.get("mxc")); out.append(a)
+            else:
+                keep.append((t, s, files))  # someone else's, still fresh
+        if keep:
+            self.rooms[room] = keep
         for a in own:
             if a.get("mxc") not in seen:
                 seen.add(a.get("mxc")); out.append(a)
@@ -213,7 +222,7 @@ class Reader:
         total = cents(a["total_may_come_off"]) or 0
 
         # 1. what the owner sees, in the owner's own room (names are fine here: it is their room)
-        lines = [f"I read {len(files)} files ({'replayed fictional sample' if case['replayed'] else 'live reading'}, "
+        lines = [f"I read {len(files)} file{'' if len(files) == 1 else 's'} ({'replayed fictional sample' if case['replayed'] else 'live reading'}, "
                  f"pack {pack}). {len(f['findings'])} findings, **{money(total)} may come off**."]
         if a.get("apply_by"):
             lines.append(f"Apply for the hospital's financial assistance by **{a['apply_by']}**.")

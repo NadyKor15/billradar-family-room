@@ -186,3 +186,21 @@ def test_case_ref_never_trips_the_gate_it_travels_through(monkeypatch):
     for _ in range(300):                                          # and for real random draws, never blocked
         monkeypatch.undo()
         Gate().check(R.new_ref())
+
+
+def test_telegram_sender_name_is_the_platform_name_not_the_owner(rd):
+    # Live stand 2026-11-05: Telegram delivered Nadya's 10 files with sender_name "NadyKor15" while the
+    # room's owner is "nadya"; matching by owner name took 1 file of 10. The window matches the sender of
+    # the addressed message (only the owner may address the reader in her room).
+    for i in range(9):
+        msg(rd, "NadyKor15", 1, ts=T0 + i, start=i)
+    msg(rd, "NadyKor15", 1, addressed=True, ts=T0 + 9, start=9)
+    assert rd.taken == [(ROOM, [f"mxc://f{i}" for i in range(10)])]
+
+
+def test_someone_elses_fresh_files_stay_for_them(rd):
+    msg(rd, "alex", 2, ts=T0, start=100)
+    msg(rd, OWNER, 1, addressed=True, ts=T0 + 1, start=0)       # takes only its own sender's files
+    assert rd.taken == [(ROOM, ["mxc://f0"])]
+    msg(rd, "alex", 0, addressed=True, ts=T0 + 2)               # the other sender's files were not cleared
+    assert rd.taken[-1] == (ROOM, ["mxc://f100", "mxc://f101"])
