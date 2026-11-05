@@ -38,6 +38,8 @@ verify:
 	$(PY) -m family_room.verify
 
 test:
+	@test -x .venv-engine/bin/python || $(PY) -m venv .venv-engine
+	@.venv-engine/bin/python -m pytest --version >/dev/null 2>&1 || .venv-engine/bin/pip install -q pytest
 	.venv-engine/bin/python -m pytest -q tests
 
 status:
