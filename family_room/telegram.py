@@ -3,9 +3,11 @@
 
   status                         bridges, Telegram rooms, people the bridge has seen (names masked)
   connect                        reads {"bot_token","bot_username"} from stdin, registers the Telegram bridge
-  wire PAPERS FAMILY OWNER HELPER  room ids and Telegram user ids ("-" skips one): claims identities for the Switch
-                                 users nadya and alex, adds @reader to PAPERS and @coordinator and auditor to FAMILY,
-                                 extends the addressing policies, points agent state at the Telegram rooms, restarts agents
+  wire PAPERS FAMILY OWNER HELPER [HELPER_ROOM]  room ids and Telegram user ids ("-" skips one): claims identities for the
+                                 Switch users nadya and alex, adds @reader to PAPERS and HELPER_ROOM and @coordinator and
+                                 auditor to FAMILY, extends the addressing policies, points agent state at the Telegram
+                                 rooms, restarts agents
+  probe                          what Switch answers for each private Telegram room: coordinator 403, reader 200
   unwire                         restores the agents' Mattermost state from the backups, restarts agents
   context ROOM                   what Switch delivered in ROOM: sender (masked), attachment count, first words
 The bot token is never printed or logged. Telegram usernames are kept only in state/tg.json (0600).
@@ -90,6 +92,8 @@ def _base_rules(name: str, ids: dict) -> list:
         r += [{"rooms": [rid["handoff"]], "users": [], "agents": [ids["coordinator"]]}]
         if tg.get("papers_room") and ext.get("nadya"):
             r += [{"rooms": [tg["papers_room"]], "users": [ext["nadya"]], "agents": []}]
+        if tg.get("helper_room") and ext.get("alex"):
+            r += [{"rooms": [tg["helper_room"]], "users": [ext["alex"]], "agents": []}]
         return r
     if name == "coordinator":
         return [{"rooms": [rid["family"]], "users": [people[p]["external_id"] for p in ("nadya", "alex")], "agents": []},
@@ -101,7 +105,7 @@ def _restart() -> None:
     subprocess.run(["deploy/agents.sh", "restart"], check=True)
 
 
-def wire(papers: str, family: str, nadya: str, alex: str) -> None:
+def wire(papers: str, family: str, nadya: str, alex: str, helper_room: str = "-") -> None:
     g = gw()
     b = tg_bridge(g)
     if b is None:
@@ -119,9 +123,10 @@ def wire(papers: str, family: str, nadya: str, alex: str) -> None:
         print("claimed", name, "->", mask(tg_id))
     ids = {n: state.load(n)["id"] for n in ("reader", "coordinator", "auditor")}
     add = {}
-    if papers != "-":
-        g.call("POST", f"/gateway/rooms/{papers}/agents", {"agent_ids": [ids["reader"]]})
-        add["reader"] = [{"rooms": [papers], "users": [ext["nadya"]], "agents": []}]
+    private = {room: who for room, who in ((papers, "nadya"), (helper_room, "alex")) if room != "-"}
+    for room, who in private.items():
+        g.call("POST", f"/gateway/rooms/{room}/agents", {"agent_ids": [ids["reader"]]})
+        add.setdefault("reader", []).append({"rooms": [room], "users": [ext[who]], "agents": []})
     if family != "-":  # "-" = wire Nadya's own room only; Family later, once the second person has posted
         g.call("POST", f"/gateway/rooms/{family}/agents", {"agent_ids": [ids["coordinator"], ids["auditor"]]})
         add["coordinator"] = [{"rooms": [family], "users": [ext[n] for n in ("nadya", "alex") if n in ext], "agents": []}]
@@ -133,16 +138,21 @@ def wire(papers: str, family: str, nadya: str, alex: str) -> None:
         bak = state.STATE / f"{name}.mm.json"
         if not bak.exists():
             bak.write_text((state.STATE / f"{name}.json").read_text())
-    if papers != "-":
+    if private:
         r = state.load("reader")
-        r["private_rooms"] = {**r["private_rooms"], papers: "nadya"}
+        r["private_rooms"] = {**r["private_rooms"], **private}  # last wins in room_of: the call sheet goes to Telegram
         state.save("reader", r)
+        c = state.load("coordinator")  # ids only, so it can show Switch refusing it these rooms too
+        c["private_rooms"] = {**c["private_rooms"], **private}
+        c["telegram_rooms"] = sorted({*c.get("telegram_rooms", []), *private})
+        state.save("coordinator", c)
     for name in ("coordinator", "auditor") if family != "-" else ():
         s = state.load(name)
         s["family_room"] = family
         state.save(name, s)
     tg = json.loads(TG_STATE.read_text()) if TG_STATE.exists() else {}
-    tg.update(ext=ext, **({"papers_room": papers} if papers != "-" else {}), **({"family_room": family} if family != "-" else {}))
+    tg.update(ext=ext, **({"papers_room": papers} if papers != "-" else {}), **({"family_room": family} if family != "-" else {}),
+              **({"helper_room": helper_room} if helper_room != "-" else {}))
     TG_STATE.write_text(json.dumps(tg, indent=2))
     os.chmod(TG_STATE, 0o600)
     _restart()
@@ -171,6 +181,24 @@ def context(room: str) -> None:
               (m.get("body") or "")[:70].replace("\n", " "))
 
 
+def probe() -> None:
+    """Each private Telegram room, asked as each agent. The coordinator must be refused, and the reader, which is
+    a member, must get in: without that control a 403 could mean a wrong room id."""
+    rooms = state.load("coordinator").get("telegram_rooms", [])
+    if not rooms:
+        raise SystemExit("no private Telegram rooms wired")
+    bad = 0
+    for room in rooms:
+        for who, want in (("coordinator", 403), ("reader", 200)):
+            st = state.load(who)
+            api = Http(state.API, headers={"Authorization": "Bearer " + st["api_key"]})
+            got = api.raw("POST", f"/agents/{st['id']}/ops/read_context", {"room_id": room, "limit": 1})[0]
+            bad += got != want
+            print(room, who, got, "ok" if got == want else f"WANTED {want}")
+    if bad:
+        raise SystemExit(f"{bad} answer(s) not as they should be")
+
+
 if __name__ == "__main__":
     cmd, *rest = sys.argv[1:] or ["status"]
-    {"status": status, "connect": connect, "wire": wire, "unwire": unwire, "context": context}[cmd](*rest)
+    {"status": status, "connect": connect, "wire": wire, "unwire": unwire, "context": context, "probe": probe}[cmd](*rest)

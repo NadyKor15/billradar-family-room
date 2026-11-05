@@ -1,0 +1,48 @@
+# A clean clone on a machine that is not ours runs the same commands the README gives: no keys, no model.
+name: clean clone
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  story:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: make up
+        run: make up
+
+      - name: make demo
+        run: make demo
+
+      - name: make verify
+        run: make verify
+
+      - name: make test
+        run: make test
+
+      - name: what the stand said
+        if: failure()
+        run: |
+          deploy/stand.sh ps || true
+          deploy/agents.sh status || true
+          TAIL=80 deploy/stand.sh logs || true
+          tail -n 80 logs/*.log || true
+
+      - name: make wipe
+        if: always()
+        run: make wipe || true

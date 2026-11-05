@@ -16,6 +16,14 @@ PHONE = re.compile(r"\(\d{3}\)\s*\d{3}-\d{4}")
 DATE_US = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")  # birth dates on the papers are printed this way
 
 
+def strip_shapes(text: str) -> str:
+    """The text without anything of a private-looking shape: for text going to a model, where there is no
+    case to build a Gate from. It knows shapes only, not names."""
+    for rx in (MEDIA_HANDLE, LONG_DIGITS, PHONE, DATE_US):
+        text = rx.sub(" ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
