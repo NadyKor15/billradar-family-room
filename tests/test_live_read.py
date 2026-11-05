@@ -240,3 +240,43 @@ time.sleep(30)
         E.run_live_read(PACK, {"h"}, 1.5)
     assert e.value.kind == "timeout"
     assert not alive(int(ready.read_text())), "a child that ignores the first signal survived"
+
+
+# ── Muse Glimmer's answers, kept per computer ────────────────────────────────
+
+def test_glimmer_cache_holds_the_engines_recordings_and_this_computers_answers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.delenv("X_RECORD", raising=False)
+    engine_dir, cache = tmp_path / "engine", tmp_path / "cache"
+    engine_dir.mkdir()
+    cache.mkdir()
+    (engine_dir / "a.txt").write_text("from the engine")
+    (engine_dir / "b.txt").write_text("from the engine")
+    (cache / "b.txt").write_text("made here")
+    fake = SimpleNamespace(RECORDINGS=engine_dir, RECORD_TO="X_RECORD")
+    L.use_glimmer_cache(fake, cache)
+    assert fake.RECORDINGS == cache and os.environ["X_RECORD"] == str(cache)
+    assert (cache / "a.txt").read_text() == "from the engine"
+    assert (cache / "b.txt").read_text() == "made here"                # an answer made here is not overwritten
+    assert sorted(p.name for p in engine_dir.iterdir()) == ["a.txt", "b.txt"]
+
+
+def test_glimmer_is_asked_once_per_picture_and_nothing_lands_in_the_engine(tmp_path, monkeypatch):
+    local_reader = pytest.importorskip("billradar.local_reader")
+    image = pytest.importorskip("PIL.Image").new("RGB", (8, 8))
+    engine_dir, cache = tmp_path / "engine", tmp_path / "cache"
+    engine_dir.mkdir()
+    asked = []
+    monkeypatch.setattr(local_reader, "RECORDINGS", engine_dir)
+    monkeypatch.setattr(local_reader._server, "ask", lambda prompt, jpeg: asked.append(prompt) or "1|text")
+    monkeypatch.delenv(local_reader.RECORD_TO, raising=False)
+    L.use_glimmer_cache(local_reader, cache)
+    assert local_reader._ask("q", image) == "1|text" and local_reader._ask("q", image) == "1|text"
+    assert asked == ["q"]
+    assert local_reader._ask("another question", image) == "1|text" and len(asked) == 2      # control: a new picture or question asks
+    assert not list(engine_dir.iterdir()) and len(list(cache.iterdir())) == 2
+
+
+def test_the_cache_is_outside_the_repository_and_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert L.glimmer_cache() == tmp_path / ".cache" / "billradar-family-room" / "glimmer-answers"

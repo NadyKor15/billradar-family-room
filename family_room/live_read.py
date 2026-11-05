@@ -9,6 +9,8 @@ a file that is not in the pack cannot reach a model.
 It writes runs/agents/<id>/{case,report,meta}.json as the engine's analyze_case does, so the MCP tools take the case.
 runs/ is ignored by the engine's git. The models' raw answers go to LIVE_RECORD_DIR under state/, not to the engine's
 tests/fixtures/recordings, so the submodule stays clean. Prices and the journal do not depend on them.
+What Muse Glimmer answers on this computer is kept outside the repository (`use_glimmer_cache`): it runs here, costs
+nothing per call, and a picture asked again has one answer. SAM 3.1, Muse Spark and Muse Wonder are called every time.
 Stdout is one JSON line: case_id, source, replayed, the engine's summary fields and problems. On failure: {"error": kind}
 and a non-zero exit, with the traceback on stderr.
 """
@@ -20,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import sys
 import threading
@@ -61,11 +64,29 @@ def choose_papers(packs: Path, pack: str, wanted: list[str]) -> tuple[dict, list
     return raw, photos, pdfs
 
 
+def glimmer_cache() -> Path:
+    return Path.home() / ".cache" / "billradar-family-room" / "glimmer-answers"
+
+
+def use_glimmer_cache(local_reader, folder: Path) -> None:
+    """The engine's recorded Glimmer answers match only where its pictures come out byte for byte the same, which
+    differs by computer. So the engine's recordings and the answers made here live together in `folder`, and only a
+    picture this computer has not seen goes to Glimmer. Outside `state/`, so `make wipe` does not cost a slow reading.
+    Only fictional packs reach this path: the sha256 lock in `choose_papers` comes first."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for recorded in local_reader.RECORDINGS.glob("*.txt"):
+        if not (folder / recorded.name).exists():
+            shutil.copyfile(recorded, folder / recorded.name)
+    local_reader.RECORDINGS = folder
+    os.environ[local_reader.RECORD_TO] = str(folder)
+
+
 def read_pack(pack: str, wanted: list[str]) -> dict:
-    from billradar import agent_api, pipeline, providers
+    from billradar import agent_api, local_reader, pipeline, providers
     from billradar.case import Profile
 
     raw, photos, pdfs = choose_papers(agent_api.PACKS, pack, wanted)
+    use_glimmer_cache(local_reader, glimmer_cache())
     case_id = "a" + secrets.token_hex(6)
     client = providers.make_client()
     client.record_to = Path(os.environ["LIVE_RECORD_DIR"]) if os.environ.get("LIVE_RECORD_DIR") else None
