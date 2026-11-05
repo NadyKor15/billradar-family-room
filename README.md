@@ -129,3 +129,7 @@ What is different in Telegram:
 - Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. The room boundary covers other people and agents and does not cover whoever runs the server.
 - Both agents run as one OS user, and each reads its own key from `state/` by convention. A real deployment would run them under separate users.
 - Cases and the reminder timer live in memory: restarting an agent forgets them. In the demo the reminder fires 45 seconds after the case arrives (`REMINDER_AFTER_S`); it does not count down to the date.
+
+## License
+
+This repository's own code is under the MIT License (`LICENSE`). `deploy/switch-0.31.0/` and the submodule `vendor/billradar-meta` keep their own licenses.
