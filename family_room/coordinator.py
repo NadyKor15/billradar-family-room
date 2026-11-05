@@ -5,6 +5,10 @@ strict handoff messages (codes, cents, dates, sheet/line references), posts the 
 asks about a helper only through the owner, keeps its own clock for reminders (Switch has no scheduler), and relays call help.
 Ask it for someone's papers and it tries, on screen: Switch refuses, because it is not a member.
 
+What a relative reports from a call is matched to one of the reader's checked answers: by word overlap by
+default, and with LIVE=1 by a model that may only pick an answer's id (chooser.py), with word overlap as the
+fallback. The answer it posts is always the reader's own.
+
 Run: python -m family_room.coordinator   (reads state/coordinator.json only; stdlib only)
 """
 from __future__ import annotations
@@ -15,7 +19,7 @@ import re
 import threading
 from datetime import date
 
-from family_room import handoff, state
+from family_room import chooser, handoff, live, state
 from family_room.switch import Agent
 
 log = logging.getLogger("family_room.coordinator")
@@ -62,6 +66,17 @@ def words(s: str) -> set[str]:
     return {w for w in re.findall(r"[a-z']+", s.lower()) if w not in STOP and len(w) > 2}
 
 
+def word_match(text: str, objections: list[dict]) -> dict | None:
+    ws = words(text)
+    best, score = None, 0.0
+    for o in objections:
+        ow = words(o["they_say"])
+        s = len(ws & ow) / max(1, len(ow))
+        if s > score:
+            best, score = o, s
+    return best if best and score >= 0.5 else None
+
+
 class Coordinator:
     def __init__(self):
         st = state.load("coordinator")
@@ -73,6 +88,7 @@ class Coordinator:
         self.private_rooms: dict[str, str] = st.get("private_rooms", {})  # only for the refusal demo
         self.cases: dict[str, dict] = {}
         self.waiting: dict[tuple[str, str], str] = {}       # (case, objection) -> who asked
+        self.chooser = chooser.from_env()                   # None unless LIVE=1
 
     # ── posting ─────────────────────────────────────────────────────────────
     def say(self, text: str) -> None:
@@ -94,7 +110,14 @@ class Coordinator:
             except handoff.SchemaError as exc:
                 log.warning("refused handoff message: %s", exc)
         elif room == self.family and p.get("sender_kind") != "platform":
-            self.from_person(p.get("sender_name", ""), p.get("body", ""))
+            if self.chooser:  # a model call must not hold up the event stream
+                self.run_async(self.from_person, p.get("sender_name", ""), p.get("body", ""))
+            else:
+                self.from_person(p.get("sender_name", ""), p.get("body", ""))
+
+    @staticmethod
+    def run_async(fn, *args) -> None:
+        threading.Thread(target=fn, args=args, daemon=True).start()
 
     # ── reader → family ─────────────────────────────────────────────────────
     def from_reader(self, m: dict) -> None:
@@ -140,7 +163,7 @@ class Coordinator:
     def case_posted(self, m: dict) -> None:
         others = [p for p in self.people if p != self.owner]
         lines = [f"📋 BillRadar read {m['sheets']} of @{self.owner}'s papers "
-                 f"({'fictional sample, replayed' if m['replayed'] else 'live'}). "
+                 f"({'fictional sample, replayed' if m['replayed'] else 'fictional sample, read live'}). "
                  f"**{money(m['total_cents'])} may come off.**"]
         for f in m["findings"]:
             amt = f" — {money(f['cents'])}" if f["cents"] else ""
@@ -189,19 +212,22 @@ class Coordinator:
             self.say(f"@{who} {money(case['total_cents'])} may come off. Waiting for {self.owner.capitalize()}'s OK "
                      f"on: {', '.join(left) or 'nothing'}. Apply by {case['apply_by']}.")
             return
-        ws = words(text)
-        best, score = None, 0.0
-        for o in case["objections"]:
-            ow = words(o["they_say"])
-            s = len(ws & ow) / max(1, len(ow))
-            if s > score:
-                best, score = o, s
-        if best and score >= 0.5:
+        best = self.pick(text, case["objections"])
+        if best:
             self.waiting[(case["case"], best["id"])] = who
             self.to_reader({"v": 1, "type": "ask", "case": case["case"], "objection": best["id"]})
             return
         self.say(f"@{who} I don't have a checked answer for that. Ask them to put it in writing. "
                  "Things I can answer: " + "; ".join(f"“{o['they_say']}”" for o in case["objections"]))
+
+    def pick(self, text: str, objections: list[dict]) -> dict | None:
+        """Which checked answer fits. The model's "none of them" stands; its failure falls back to word overlap."""
+        if self.chooser is None or not objections:
+            return word_match(text, objections)
+        answered, chosen = self.chooser.choose(text, objections)
+        if not answered:
+            return word_match(text, objections)
+        return next((o for o in objections if o["id"] == chosen), None)
 
     def try_private(self, who: str) -> None:
         """Ask Switch for the private rooms with this agent's own key, and show what Switch says."""
@@ -220,6 +246,7 @@ class Coordinator:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    live.guard_logs()
     Coordinator().run()
 
 
