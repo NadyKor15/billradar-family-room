@@ -3,7 +3,7 @@ name: clean clone
 
 on:
   push:
-    branches: [main, ci-clean-clone]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
