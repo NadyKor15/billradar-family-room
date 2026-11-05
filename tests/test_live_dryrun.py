@@ -109,6 +109,7 @@ def papers(engine):
 
 def build(monkeypatch, tmp_path, engine, mode):
     (tmp_path / "child.py").write_text(CHILD)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # the machine's Glimmer cache: a stub's answers must never reach the real one
     monkeypatch.setenv("LIVE", "1")
     monkeypatch.setenv("MODEL_API_KEY", "not-a-real-key-value")
     monkeypatch.setenv("BILLRADAR_GLIMMER_DIR", str(tmp_path / "no-glimmer"))  # on any miss: NotAvailable, never a server
@@ -246,3 +247,13 @@ def test_the_mcp_server_with_live_on_still_cannot_read_papers(monkeypatch, tmp_p
     eng = E.Engine(python=sys.executable)
     with pytest.raises(E.EngineError, match="live model run, which is off here"):
         eng.call("analyze_case", fictional=True, photos=["aGVsbG8="], household_size=1, annual_income="1")
+
+
+def test_a_dry_run_keeps_the_glimmer_cache_in_its_own_home(monkeypatch, tmp_path, engine_clone):
+    """A stub's answers kept in the real ~/.cache would pass for Muse Glimmer's on the next live reading."""
+    from family_room import live_read
+    real_home = Path.home()
+    build(monkeypatch, tmp_path, engine_clone, "stub")
+    assert Path.home() == tmp_path / "home" != real_home
+    assert live_read.glimmer_cache().is_relative_to(tmp_path)  # this is where the child looks
+    assert E.live_env()["HOME"] == str(tmp_path / "home")      # and the child gets this HOME, not the real one
