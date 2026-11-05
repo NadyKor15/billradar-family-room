@@ -138,3 +138,21 @@ def test_match_pack(monkeypatch):
     assert match_pack({"h1"}, ["a", "b"]) == (None, "ambiguous")
     assert match_pack({"zz"}, ["a", "b"]) == (None, "not a sample pack")
     assert match_pack(set(), ["a"]) == (None, "no papers")
+
+
+# 7f9031c changes only how the reader draws its own case ref; the gate itself is untouched.
+# A private value of the same shape ("c" + 8 hex with a run of 7+ digits) must still be caught,
+# and the refs the reader now draws must pass the very same gate.
+@pytest.mark.parametrize("lookalike", ["c1234567a", "member c90817263", "ref c0012345f on the bill"])
+def test_gate_still_blocks_case_ref_lookalikes(lookalike):
+    with pytest.raises(PrivacyError):
+        Gate.from_profile(PROFILE).check(lookalike)
+
+
+def test_new_refs_pass_the_unchanged_gate():
+    from family_room.reader import new_ref
+    gate = Gate.from_profile(PROFILE)
+    for _ in range(2000):
+        ref = new_ref()
+        assert ref.startswith("c") and len(ref) == 9
+        assert gate.check(ref) == ref
