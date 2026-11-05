@@ -6,7 +6,8 @@ On stdin: {"pack": name, "sha256": [...]}. It reads only the pack's own files wh
 that is not in the pack, or a pack not marked fictional, stops it before any model. No bytes come in from outside, so
 a file that is not in the pack cannot reach a model.
 
-It writes runs/agents/<id>/{case,report,meta}.json as the engine's analyze_case does, so the MCP tools take the case.
+It writes runs/agents/<id>/{case,report,meta}.json as the engine's analyze_case does, so the MCP tools take the case,
+and keeps the sheets (`sheets/`, `sent-sheets/`) beside them for the marks step, which runs only for the reading that is shown.
 runs/ is ignored by the engine's git. The models' raw answers go to LIVE_RECORD_DIR under state/, not to the engine's
 tests/fixtures/recordings, so the submodule stays clean. Prices and the journal do not depend on them.
 What Muse Glimmer answers on this computer is kept outside the repository (`use_glimmer_cache`): it runs here, costs
@@ -83,6 +84,26 @@ def use_glimmer_cache(local_reader, folder: Path) -> None:
     os.environ[local_reader.RECORD_TO] = str(folder)
 
 
+def keep_sheets(pipeline, run_, d: Path) -> bool:
+    """Leave the sheets as photographed, the covered ones the models got, and what each says (`sheets/printed.json`) in the
+    case's folder: what `highlight.attach` needs later, in the separate marks step (live_marks.py), if this reading is the
+    one shown. The engine's own `pipeline.save` makes them, in a scratch folder next to the case; only these two folders
+    are copied over, so case.json, report.json and meta.json are never touched. Local work, no model, no cost. A failure
+    here is logged and the reading's result comes back anyway: the case stands without marks."""
+    scratch = d.parent / f".sheets-{d.name}"
+    try:
+        pipeline.save(run_, scratch)
+        for name in ("sheets", "sent-sheets"):
+            if (scratch / name).is_dir():
+                shutil.copytree(scratch / name, d / name, dirs_exist_ok=True)
+        return True
+    except Exception:  # noqa: BLE001 - an extra; the case is already written
+        sys.stderr.write("sheets for marks not kept:\n" + traceback.format_exc())
+        return False
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def read_pack(pack: str, wanted: list[str]) -> dict:
     from billradar import agent_api, checks, local_reader, pipeline, providers
     from billradar.case import Profile
@@ -104,8 +125,10 @@ def read_pack(pack: str, wanted: list[str]) -> dict:
     (d / "report.json").write_text(run_.report.model_dump_json())
     (d / "meta.json").write_text(json.dumps({"source": source, "replayed": run_.replayed,
                                              "checked": run_.verdict.checked if run_.verdict else 0}))
+    kept = keep_sheets(pipeline, run_, d)
     return {"case_id": case_id, "source": source, "replayed": run_.replayed,
-            **agent_api._summary(run_.case, run_.report), "problems": list(run_.problems) + [f"corrected: {x}" for x in corrected]}
+            **agent_api._summary(run_.case, run_.report), "problems": list(run_.problems) + [f"corrected: {x}" for x in corrected],
+            "sheets_kept": kept}
 
 
 def failure_kind(exc: BaseException) -> tuple[str, int]:

@@ -149,7 +149,7 @@ def test_path_from_child_to_family_message_and_the_submodule_stays_clean(monkeyp
     r = build(monkeypatch, tmp_path, engine_clone, "stub")
     posted(r)
     assert r.agent.posts[0][1].startswith(f"Reading 10 files live (fictional pack {PACK})"), said(r)
-    first = r.agent.posts[1][1].split("\n")[0]
+    first = next(t for _, t in r.agent.posts if t.startswith("I read 10 files")).split("\n")[0]  # after the progress lines
     assert first.startswith(f"I read 10 files (live: SAM 3.1 + Muse Spark, fictional pack {PACK}, "), first
     case = r.agent.handoffs[0]
     assert case["replayed"] is False
@@ -168,6 +168,20 @@ def test_path_from_child_to_family_message_and_the_submodule_stays_clean(monkeyp
     assert (engine_clone / "runs" / "requests.jsonl").exists()
 
 
+def test_the_sheets_are_kept_beside_the_case_for_the_marks_step_and_the_submodule_stays_clean(monkeypatch, tmp_path, engine_clone):
+    """The real `pipeline.save` runs in the child, in a scratch folder; only sheets/ and sent-sheets/ come over."""
+    r = build(monkeypatch, tmp_path, engine_clone, "stub")
+    posted(r)
+    done = engine_clone / "runs" / "agents" / last_run()["engine_case"]
+    assert sorted(p.name for p in done.iterdir()) == ["case.json", "meta.json", "report.json", "sent-sheets", "sheets"]
+    sheets = sorted(p.name for p in (done / "sheets").iterdir())
+    assert "printed.json" in sheets and any(n.startswith("S") and n.endswith(".jpg") for n in sheets), sheets
+    assert any((done / "sent-sheets").glob("S*.jpg"))
+    assert json.loads((done / "case.json").read_text())["demo"] is True and "\n  " not in (done / "case.json").read_text()
+    assert not list(done.parent.glob(".sheets-*"))
+    assert git_status(engine_clone) == ""
+
+
 def test_control_the_status_check_can_light(engine_clone):
     planted = engine_clone / "tests" / "fixtures" / "recordings" / "planted-by-test.jsonl"
     planted.write_text("{}\n")
@@ -183,7 +197,7 @@ def test_the_measured_path_gives_the_recorded_result(monkeypatch, tmp_path, engi
     posted(r)
     if NO_RECORDING in said(r):
         pytest.skip("Muse Glimmer's recordings do not match the images rendered on this machine")
-    first = r.agent.posts[1][1].split("\n")[0]
+    first = next(t for _, t in r.agent.posts if t.startswith("I read 10 files")).split("\n")[0]  # after the progress lines
     assert first.startswith(f"I read 10 files (live: SAM 3.1 + Muse Spark + Muse Wonder, fictional pack {PACK}, "), said(r)[:600]
     assert "**$1,596.53 may come off**" in first
     case = r.agent.handoffs[0]
