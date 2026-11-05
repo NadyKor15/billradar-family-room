@@ -159,8 +159,8 @@ The same agents also run in Telegram, through the same Switch, with no public ad
 
 1. Create a bot with @BotFather and turn Group Privacy off before adding it to a group.
 2. Put `{"bot_token": "...", "bot_username": "..."}` in a file and run `python3.12 -m family_room.telegram connect < that-file`. The token is not printed or logged.
-3. Make two groups with the bot: one for the person handling the bills, one for the family. Each person needs a Telegram username and writes one message in each of their groups, so Switch sees the rooms and the people.
-4. `python3.12 -m family_room.telegram status` lists room ids and Telegram user ids. Then `python3.12 -m family_room.telegram wire PAPERS_ROOM FAMILY_ROOM OWNER_ID HELPER_ID`. `unwire` puts the agents back on Mattermost.
+3. Make groups with the bot: one for the person handling the bills, one for the family, and, if you want the call sheet on the relative's phone, one for the relative. Each person needs a Telegram username and writes one message in each of their groups, so Switch sees the rooms and the people.
+4. `python3.12 -m family_room.telegram status` lists room ids and Telegram user ids. Then `python3.12 -m family_room.telegram wire PAPERS_ROOM FAMILY_ROOM OWNER_ID HELPER_ID [HELPER_ROOM]`. `python3.12 -m family_room.telegram probe` asks Switch about each private group as each agent: the coordinator must get 403 and the reader 200. `unwire` puts the agents back on Mattermost.
 
 What is different in Telegram:
 
@@ -169,8 +169,8 @@ What is different in Telegram:
 - Cards appear as inline buttons in the owner's group.
 - The files to send are in `vendor/billradar-meta/eval/packs/work/brs1-birth-all-errors/`.
 - One Telegram bot fronts both agents, and Switch still checks room membership per agent.
-- `handoff`, the coordinator's 403 probe and `make verify` stay on the Mattermost rooms.
-- These steps give the relative no private Telegram group, so the call sheet goes to their Mattermost room `alex-papers`.
+- `handoff` and `make verify` stay on the Mattermost rooms. The coordinator's 403 probe asks about each person's Telegram group if they have one, and otherwise about their Mattermost room.
+- With `HELPER_ROOM` the call sheet goes to the relative's Telegram group. Without it, it goes to their Mattermost room `alex-papers`.
 
 ## Known limits
 

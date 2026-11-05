@@ -86,6 +86,7 @@ class Coordinator:
         self.owner: str = st["patient"]                     # whose papers the demo case is
         self.reader = st.get("reader_name", "reader")
         self.private_rooms: dict[str, str] = st.get("private_rooms", {})  # only for the refusal demo
+        self.telegram_rooms: set[str] = set(st.get("telegram_rooms", []))  # which of them are Telegram groups
         self.cases: dict[str, dict] = {}
         self.waiting: dict[tuple[str, str], str] = {}       # (case, objection) -> who asked
         self.chooser = chooser.from_env()                   # None unless LIVE=1
@@ -231,11 +232,16 @@ class Coordinator:
 
     def try_private(self, who: str) -> None:
         """Ask Switch for the private rooms with this agent's own key, and show what Switch says."""
-        out = []
+        one_each: dict[str, str] = {}  # one room per person, their Telegram room if they have one
         for room_id, owner in self.private_rooms.items():
+            if owner not in one_each or room_id in self.telegram_rooms:
+                one_each[owner] = room_id
+        out = []
+        for owner, room_id in one_each.items():
             status, body = self.agent.op_raw("read_context", room_id=room_id, limit=5)
             detail = body.decode(errors="replace")[:120]
-            out.append(f"{owner.capitalize()}'s room → HTTP {status} {detail}")
+            kind = "Telegram room" if room_id in self.telegram_rooms else "room"
+            out.append(f"{owner.capitalize()}'s {kind} → HTTP {status} {detail}")
         self.say(f"@{who} I just asked Switch for the private rooms with my own key:\n" + "\n".join(
             f"- {x}" for x in out) + "\nI'm not a member of those rooms, so Switch refuses. "
                                      "I only know what the reader agent passes me after the owner says yes.")
