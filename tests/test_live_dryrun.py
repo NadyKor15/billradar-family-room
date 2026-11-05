@@ -111,6 +111,7 @@ def build(monkeypatch, tmp_path, engine, mode):
     (tmp_path / "child.py").write_text(CHILD)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))  # the machine's Glimmer cache: a stub's answers must never reach the real one
     monkeypatch.setenv("LIVE", "1")
+    monkeypatch.setenv("LIVE_READINGS", "1")
     monkeypatch.setenv("MODEL_API_KEY", "not-a-real-key-value")
     monkeypatch.setenv("BILLRADAR_GLIMMER_DIR", str(tmp_path / "no-glimmer"))  # on any miss: NotAvailable, never a server
     monkeypatch.delenv("BILLRADAR_LLAMA_SERVER", raising=False)

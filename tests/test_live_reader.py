@@ -85,7 +85,7 @@ class FakeRead:
     def __init__(self):
         self.result, self.calls = ANALYZED, []
 
-    def __call__(self, pack, hashes, timeout):
+    def __call__(self, pack, hashes, timeout, glimmer=True):
         self.calls.append((pack, set(hashes), timeout))
         if isinstance(self.result, Exception):
             raise self.result
@@ -102,6 +102,7 @@ def read(monkeypatch):
 @pytest.fixture
 def rd(monkeypatch, tmp_path, packs, read):
     monkeypatch.setenv("LIVE", "1")
+    monkeypatch.setenv("LIVE_READINGS", "1")  # one reading here; two at once in test_two_readings.py
     monkeypatch.setenv("MODEL_API_KEY", KEY)
     st = {"id": "a1", "api_key": "k", "connection_id": "c1", "private_rooms": {ROOM: OWNER, "room-alex": "alex"},
           "handoff_room": HANDOFF}
@@ -412,7 +413,8 @@ def test_finished_run_is_recorded_with_its_problems(rd):
     row = json.loads((R.state.STATE / "live_runs.jsonl").read_text())
     assert row["status"] == "read" and row["engine_case"] == ANALYZED["case_id"] and row["pack"] == PACK and row["files"] == 5
     assert row["problems"] == ANALYZED["problems"]
-    assert set(row) == {"at", "pack", "files", "seconds", "usd", "calls", "models", "problems", "status", "engine_case"}
+    assert set(row) == {"at", "pack", "files", "seconds", "usd", "calls", "models", "problems", "status", "engine_case",
+                        "readings", "other_problems", "not_counted"}
 
 
 def test_demo_waits_longer_only_with_live():

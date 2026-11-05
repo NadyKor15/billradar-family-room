@@ -143,6 +143,11 @@ def money(c: int | None) -> str:
     return "" if c is None else f"${c / 100:,.2f}"
 
 
+def fuller(readings: list[dict]) -> dict:
+    """The reading with the most money found, then the most items; the first of equals. Both passed the engine's own checks."""
+    return max(readings, key=lambda a: (cents(a.get("total_may_come_off")) or 0, a.get("findings", 0) + a.get("worth_asking", 0)))
+
+
 def income_band(prof: dict) -> str:
     from billradar import fpl  # the engine's own poverty-guideline table
     pct = fpl.percent_of_guideline(Decimal(prof["annual_income"]), int(prof["household_size"]))
@@ -267,32 +272,103 @@ class Reader:
         self.agent.post(room, f"Reading {n} file{'' if n == 1 else 's'} live (fictional pack {pack}). This takes "
                               "minutes. The result will come here.")
         mark, log_mark, began = live.journal_mark(JOURNAL), live.journal_mark(engine_log()), time.monotonic()
-        stopped, a = None, {}
-        try:
-            with Progress(lambda text: self.agent.post(room, text), JOURNAL, mark):
-                a = run_live_read(pack, hashes, live.read_timeout())
-        except LiveReadFailed as exc:
-            log.exception("live reading stopped (pack %s). Its log says: %s", pack, live.text_since(engine_log(), log_mark)[-2000:])
-            stopped = LIVE_STOP_WORDS.get(exc.kind, LIVE_STOP_OTHER)
+        wanted = live.readings()
+        with Progress(lambda text: self.agent.post(room, text), JOURNAL, mark):
+            got, failed = self.readings(pack, hashes, wanted)
+        for exc in failed:
+            log.error("a live reading stopped (pack %s): %s", pack, exc, exc_info=exc)
+        if failed:
+            log.error("the readings' log says: %s", live.text_since(engine_log(), log_mark)[-2000:])
         seconds, stats = time.monotonic() - began, live.journal_since(JOURNAL, mark)
         run = {"pack": pack, "files": n, "seconds": round(seconds, 1), "usd": stats["usd"], "calls": stats["calls"],
-               "models": stats["models"], "problems": a.get("problems", [])}
-        if a and a.get("replayed", True):
-            log.error("live reading came back replayed (pack %s)", pack)
-            stopped = "the engine answered from a recording, not from a model."
-        if stopped:
-            live.record_run({**run, "status": "stopped"})
+               "models": stats["models"]}
+        recorded = [x for x in got if x.get("replayed", True)]
+        if recorded:
+            log.error("a live reading came back replayed (pack %s)", pack)
+        read = [x for x in got if not x.get("replayed", True)]
+        if not read:
+            stopped = ("the engine answered from a recording, not from a model." if recorded else
+                       LIVE_STOP_WORDS.get(failed[0].kind, LIVE_STOP_OTHER))
+            live.record_run({**run, "status": "stopped", "problems": []})
             self.agent.post(room, LIVE_STOPPED.format(why=stopped))
             return
-        live.record_run({**run, "status": "read", "engine_case": a["case_id"]})
+        a = fuller(read)
+        others = [x for x in read if x is not a]
+        live.record_run({**run, "status": "read", "engine_case": a["case_id"], "problems": a.get("problems", []),
+                         "readings": [{"case": x["case_id"], "total": x["total_may_come_off"]} for x in read],
+                         "other_problems": [x.get("problems", []) for x in others], "not_counted": len(failed) + len(recorded)})
         try:
-            self.present(room, pack, n, a, how=live.how_read(pack, stats, seconds))
+            self.present(room, pack, n, a, how=live.how_read(pack, stats, seconds, len(read)),
+                         note=self.compare_note(a, others, wanted))
         except Exception:  # noqa: BLE001 - e.g. the strict schema refusing what was read
             log.exception("live case %s could not be presented", a["case_id"])
             self.agent.post(room, "The live reading finished, but the case could not be passed on, so the family room "
                                   "got nothing. The reader's log has it.")
 
-    def present(self, room: str, pack: str, n_files: int, a: dict, how: str | None = None) -> None:
+    @staticmethod
+    def readings(pack: str, hashes: set[str], wanted: int) -> tuple[list[dict], list[LiveReadFailed]]:
+        """The readings at once, each its own child process, in order. Only the first may start Muse Glimmer; another
+        that misses the kept answers stops and does not count. Failures in order too, so the first reading's reason leads."""
+        timeout = live.read_timeout()
+        got: list[dict | None] = [None] * wanted
+        failed: list[LiveReadFailed | None] = [None] * wanted
+
+        def one(i: int) -> None:
+            try:
+                got[i] = run_live_read(pack, hashes, timeout) if i == 0 else run_live_read(pack, hashes, timeout, glimmer=False)
+            except LiveReadFailed as exc:
+                failed[i] = exc
+            except Exception as exc:  # noqa: BLE001 - one reading's bug must not lose the other
+                log.exception("a live reading failed on the reader's side (pack %s)", pack)
+                failed[i] = LiveReadFailed("failed", type(exc).__name__)
+
+        threads = []
+        for i in range(1, wanted):
+            t = threading.Thread(target=one, args=(i,), daemon=True, name=f"live-read-{i}")
+            try:
+                t.start()
+                threads.append(t)
+            except RuntimeError as exc:  # the first reading still runs
+                log.exception("could not start reading %d", i + 1)
+                failed[i] = LiveReadFailed("failed", type(exc).__name__)
+        one(0)
+        for t in threads:
+            t.join()
+        return [x for x in got if x], [x for x in failed if x]
+
+    def compare_note(self, a: dict, others: list[dict], wanted: int) -> str:
+        """The honest line about the readings. It goes only to the owner's room."""
+        if not others:
+            return ("" if wanted == 1 else
+                    "I read them once: the second reading stopped, so there is nothing to compare with.")
+        mine = self.sure_findings(a)
+        kinds = {x["kind"] for x in mine}
+        extra, totals = [], {cents(a["total_may_come_off"]) or 0}
+        for other in others:
+            totals.add(cents(other["total_may_come_off"]) or 0)
+            extra += [x for x in self.sure_findings(other) if x["kind"] not in kinds]
+        total = cents(a["total_may_come_off"]) or 0
+        if len(totals) == 1:
+            line = f"I read them twice at the same time. Both readings agree on **{money(total)}**."
+            also = "The other reading also noted"
+        else:
+            rest = ", ".join(money(t) for t in sorted(totals - {total}, reverse=True))
+            line = (f"I read them twice at the same time and the readings differ: one found **{money(total)}**, "
+                    f"the other **{rest}**. Here is the fuller one.")
+            also = "The other reading also found"
+        if not extra:
+            return line
+        items = "; ".join(f"{x['title']}" + (f": {money(cents(x['amount']))}" if x.get("amount") else "") for x in extra)
+        return f"{line} {also}: {items}. Not in the total above; worth checking."
+
+    def sure_findings(self, a: dict) -> list[dict]:
+        try:
+            return self.engine.call("get_findings", case_id=a["case_id"]).get("findings", [])
+        except EngineError:
+            log.exception("could not read the findings of case %s", a["case_id"])
+            return []
+
+    def present(self, room: str, pack: str, n_files: int, a: dict, how: str | None = None, note: str = "") -> None:
         """A finished reading, replayed or live: the owner's message, the cards, the de-identified case."""
         owner = self.private[room]
         cid = a["case_id"]
@@ -324,6 +400,8 @@ class Reader:
         said = how or f"{'replayed fictional sample' if case['replayed'] else 'live reading'}, pack {pack}"
         lines = [f"I read {n_files} file{'' if n_files == 1 else 's'} ({said}). "
                  f"{len(f['findings'])} findings, **{money(total)} may come off**."]
+        if note:
+            lines.append(note)
         if a.get("apply_by"):
             lines.append(f"Apply for the hospital's financial assistance by **{a['apply_by']}**.")
         for x in f["findings"]:

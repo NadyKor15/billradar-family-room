@@ -109,12 +109,14 @@ def stop_group(proc: subprocess.Popen) -> None:
         proc.stdout.close()
 
 
-def run_live_read(pack: str, hashes: set[str], timeout: float) -> dict[str, Any]:
-    """One live reading in a child process. Blocks the calling thread; raises LiveReadFailed on anything but a result."""
+def run_live_read(pack: str, hashes: set[str], timeout: float, glimmer: bool = True) -> dict[str, Any]:
+    """One live reading in a child process. Blocks the calling thread; raises LiveReadFailed on anything but a result.
+    With glimmer=False it may not start Muse Glimmer (one server, one model): a sheet missing from the kept answers stops it."""
     state.STATE.mkdir(parents=True, exist_ok=True)
     request = json.dumps({"pack": pack, "sha256": sorted(hashes)}).encode()
+    env = live_env() | ({} if glimmer else {"BILLRADAR_GLIMMER_DIR": str(state.STATE / "no-glimmer-for-this-reading")})
     with engine_log().open("ab") as err:
-        proc = subprocess.Popen(live_read_command(), cwd=str(ENGINE), env=live_env(), stdin=subprocess.PIPE,
+        proc = subprocess.Popen(live_read_command(), cwd=str(ENGINE), env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=err, start_new_session=True)
     try:
         out, _ = proc.communicate(request, timeout=timeout)

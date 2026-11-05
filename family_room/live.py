@@ -18,6 +18,7 @@ log = logging.getLogger("family_room.live")
 KEY_ENV = "MODEL_API_KEY"
 DEFAULT_SPEND_CAP_USD = 15.0
 DEFAULT_READ_TIMEOUT_S = 3600.0
+DEFAULT_READINGS = 2
 # Screen names of the model ids the engine writes in its journal (same as billradar.providers).
 MODEL_NAMES = {"sam-3.1": "SAM 3.1", "muse-spark-1.3": "Muse Spark", "muse-wonder-1.0": "Muse Wonder"}
 
@@ -42,6 +43,15 @@ def spend_cap() -> float:
 def read_timeout() -> float:
     raw = os.environ.get("LIVE_READ_TIMEOUT_S", "").strip()
     return float(raw) if raw else DEFAULT_READ_TIMEOUT_S
+
+
+def readings() -> int:
+    """How many readings of the same papers run at once. A model's reading varies from run to run."""
+    raw = os.environ.get("LIVE_READINGS", "").strip()
+    n = int(raw) if raw else DEFAULT_READINGS
+    if n < 1:
+        raise ValueError("LIVE_READINGS must be 1 or more")
+    return n
 
 
 def not_ready() -> str | None:
@@ -137,10 +147,15 @@ def model_names(ids: list[str]) -> list[str]:
     return [MODEL_NAMES.get(i, i) for i in ids]
 
 
-def how_read(pack: str, stats: dict, seconds: float) -> str:
+def how_read(pack: str, stats: dict, seconds: float, readings: int = 1) -> str:
     """The words in brackets after "I read N files": which models, which pack, how long, how much."""
     names = " + ".join(model_names(stats["models"]))
-    parts = [f"live: {names}" if names else "live", f"fictional pack {pack}", f"{seconds:.0f} s"]
+    parts = [f"live: {names}" if names else "live", f"fictional pack {pack}"]
+    if readings == 2:
+        parts.append("read twice at the same time")
+    elif readings > 2:
+        parts.append(f"read {readings} times at the same time")
+    parts.append(f"{seconds:.0f} s")
     if stats["calls"]:
         parts.append(f"${stats['usd']:.2f}")
     return ", ".join(parts)
