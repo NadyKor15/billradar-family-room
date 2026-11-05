@@ -111,10 +111,6 @@ What is different in Telegram:
 - Telegram recompresses images picked from the gallery, and the reader then cannot recognise the sample pack. Send them as files.
 - Cards appear as inline buttons in the owner's group.
 
-## About the video
-
-The phone footage is a real Telegram session. Nadya sends the files and presses the buttons herself. The relative's two messages in the family group were entered by automation from his account, with his permission.
-
 ## Known limits
 
 - A refused card answer is visible in Switch's log, not to the person who pressed the button.
