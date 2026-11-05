@@ -28,11 +28,11 @@ git clone --recurse-submodules https://github.com/NadyKor15/billradar-family-roo
 make up       # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
 make demo     # the story above, ≈60 s
 make verify   # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
-make test     # 201 unit tests, no stand needed; the ones that use the engine skip until `make engine` has run
+make test     # 351 tests, no stand needed; the ones that use the engine skip until `make engine` has run
 make down     # stop everything (make wipe also drops the data)
 ```
 
-GitHub runs these same commands on a clean clone at every push (`.github/workflows/clean-clone.yml`), with no keys.
+GitHub runs these same commands on a clean clone at every push to main (`.github/workflows/clean-clone.yml`), with no keys.
 
 Needs Docker with Compose, Python 3.12, make, git, curl, openssl and network access: `make up` pulls the images and downloads 14 public policy documents, and it stops if a download fails. The Mattermost image is amd64 only, so Apple Silicon runs it under emulation. Everything binds to 127.0.0.1 (ports: 38000 Switch API, 38030 Switch Gateway, 38065 Mattermost, 38432 Postgres). `make demo` plays Nadya and Alex through Mattermost's API. Open http://localhost:38065 to watch or to do the steps yourself; demo passwords are in `state/people.json`. The Gateway login is in `deploy/.env`.
 
@@ -104,6 +104,8 @@ Without keys the engine runs only its fictional sample packs and says so (REPLAY
 
 There are two modes. By default the reader replays the engine's recorded result for a recognised fictional pack, and neither agent calls a model. With `LIVE=1` and a Meta Model API key, the reader reads that pack with the engine's models: SAM 3.1 finds the sheets, Muse Spark reads them, Muse Wonder reviews the result. The coordinator asks Muse Spark which checked answer fits.
 
+A model's reading varies from run to run, so the reader reads the pack twice at the same time and shows the reading that found more money, then more items. A line in the owner's room says whether the two agree and gives both totals if they differ. If one reading stops, the line says the papers were read once.
+
 `deploy/agents.sh` passes each agent only its own part. Without `LIVE=1` neither agent gets any of these, even if the shell has them. `deploy/agents.sh start` refuses `LIVE=1` with no key.
 
 ```
@@ -118,6 +120,8 @@ make verify
 |---|---|---|---|
 | `LIVE` | both | `1` turns live mode on | off |
 | `MODEL_API_KEY` | both | the key; reaches a process only through its environment | none |
+| `LIVE_READINGS` | reader | how many readings of the same papers run at once | 2 |
+| `LIVE_SHARED_GLIMMER` | reader | `1` means one Muse Glimmer already answers on `BILLRADAR_GLIMMER_PORT`, so every reading may use it; otherwise only the first reading may start one | off |
 | `LIVE_SPEND_CAP_USD` | reader | daily ceiling, passed to the reading as `BILLRADAR_DAILY_SPEND_USD`; must be above 0 | 15 |
 | `META_SPEND_CAP_USD` | reader | the engine's ceiling over all days | 40 |
 | `LIVE_READ_TIMEOUT_S` | reader | how long one reading may run before it is stopped | 3600 |
@@ -130,9 +134,9 @@ make verify
 
 **What goes to a model.** A live reading starts only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and no reading starts.
 
-- **The reader** starts a child process (`family_room/live_read.py`) and gives it the pack's name and the sha256 list, never the bytes. The child reads only the pack's own files on that list, checks that the pack says `"fictional": true`, and refuses otherwise, so a file from outside the pack cannot get to a model. It runs the engine's `pipeline.run` with the pack's own profile and date, in the engine's private mode: a blurred copy of each photo goes to SAM 3.1, the closed sheets and PDF pages to Muse Spark, and the findings and letters to Muse Wonder. A new pack without a profile is not read.
+- **The reader** starts a child process for each reading (`family_room/live_read.py`) and gives it the pack's name and the sha256 list, never the bytes. The child reads only the pack's own files on that list, checks that the pack says `"fictional": true`, and refuses otherwise, so a file from outside the pack cannot get to a model. It runs the engine's `pipeline.run` with the pack's own profile and date, in the engine's private mode: a blurred copy of each photo goes to SAM 3.1, the closed sheets and PDF pages to Muse Spark, and the findings and letters to Muse Wonder. A new pack without a profile is not read.
 - **The closing step** reads each sheet on this computer with Muse Glimmer. On this pack it first looks for a recorded answer to the same picture. The recordings match byte for byte only where the pictures come out exactly the same: on the Mac that made them all of them matched, and on another Mac with the same package versions they did not. A sheet with no recording needs Muse Glimmer itself: llama-server, the weights and about 32 GB of free memory. Without those the reading stops at the first such sheet and says so. What Glimmer answers is kept in `~/.cache/billradar-family-room/`, so on a new computer the first reading is the slow one, and after that only a picture it has not seen goes to Glimmer. SAM 3.1, Muse Spark and Muse Wonder are called on every reading.
-- **Corrections.** The engine's files are unchanged at the pinned commit. One layer written during this hackathon, `family_room/reading_fixes.py`, corrects four reading slips we saw in live runs on the sample pack, before the engine's checks run, in live mode only. They were written for that pack, so other bills can still be misread.
+- **Reading rules.** `family_room/reading_fixes.py` holds a model's reading to what the paper shows, after the reading and before the engine's checks, in live mode only. A PDF whose printed header names the hospital and no practice is the hospital's bill, even if a doctor's name was read as the provider. On a summary statement, a line that says "total" and repeats the sheet's total charges to the cent is not a service, and two reads disagreeing over whether such a sheet has a line at all raise no doubt about its money. A line with no date on a sheet that covers one day takes that day. On an itemized bill, when one of two identical lines holds the sheet's whole balance as its patient share and no other line has a share, that amount is the balance. No rule adds money: the checks still work out every sum and the engine's verifier has the last word. A rule that fires leaves a line in the reading's `problems`. The engine's own files stay unchanged at the pinned commit, so these rules live in this repository, and in live mode the engine's checks see the reading after them.
 - **The marked sheet** comes after the owner has the message, the cards and the handoff has gone, and only for the reading that is shown: a short second child (`family_room/live_marks.py`) calls the engine's own `highlight.attach` on that finished case, one SAM 3.1 call per mark on the covered sheet, through the same spend ceiling. The reading that is not shown pays for no mark. A mark exists only for a finding with a sum printed on a photographed sheet; PDF pages and findings without a sum on a sheet (in the sample pack, the $1,399.71 financial assistance finding) get none. Where the device cannot find the row, there is no mark and nothing is said about it. Each mark SAM 3.1 confirmed is posted as one JPEG in the owner's own room, then one line: "BillRadar marks the exact line on the photo: code finds the row on this device and SAM 3.1 confirms it on the covered sheet." A mark only the row finder stands behind is not posted. The picture holds the sheet as photographed, so it goes nowhere else, and the handoff message is unchanged. A failure here is logged and loses nothing that was already sent.
 - **The MCP server** has no key and no live switch in either mode. It only reads finished cases.
 - **The coordinator** sends what the relative wrote and the numbered list of `they_say` strings, on a stdlib HTTP call to the same endpoint and model as the engine's reader. Long digit runs, media handles, phone numbers and US dates are dropped first. A name someone typed is not a shape, so it does go through.
@@ -141,19 +145,25 @@ make verify
 
 **What the coordinator's model can and cannot do.** It can name one id from the list, or none. Its reply is parsed for that one field, and anything else counts as a failed call and falls back to word overlap. An id that is not in the list counts as none. It cannot post a word: the sentence in the family room is the reader's checked answer with its quote, built by code. "Show me Nadya's papers" is handled before the model is asked, so the 403 does not depend on it. Each call adds a line to `state/model_calls.jsonl`: time, model, status, chosen id, seconds, and no message text. These calls are not in the engine's spend book; `CHOOSER_MAX_CALLS` is their limit.
 
-**When something fails.** The room hears "Live reading stopped" with the reason, the cap and a missing Muse Glimmer included, and the family room gets nothing. The reader never falls back to the recording and never claims a live result it did not get. One reading runs at a time. A timeout stops the child and everything it started, and only those. The child stops itself if the reader goes away.
+**When something fails.** The room hears "Live reading stopped" with the reason, the cap and a missing Muse Glimmer included, and the family room gets nothing. The reader never falls back to the recording and never claims a live result it did not get. Papers posted while a live reading runs are refused. A timeout stops the child and everything it started, and only those. The child stops itself if the reader goes away.
 
-**What a live run leaves.** `state/live_runs.jsonl` has one line per reading with its cost, seconds, models and the engine's list of problems, so a partial failure is visible. `state/engine-live.log` has the child's stderr, and the models' raw answers go to `state/live-recordings/`. The finished case goes to `runs/` in the engine's folder, which its git ignores, so the submodule stays clean (`tests/test_live_dryrun.py` checks `git status` on a clone of it).
+**What a live run leaves.** `state/live_runs.jsonl` has one line per run with both readings' totals, the run's cost, seconds and models, and the engine's list of problems for each reading, so a partial failure is visible. `state/engine-live.log` has the child's stderr, and the models' raw answers go to `state/live-recordings/`. The finished case goes to `runs/` in the engine's folder, which its git ignores, so the submodule stays clean (`tests/test_live_dryrun.py` checks `git status` on a clone of it).
 
-**Measured on `brs1-birth-all-errors`** (`family_room/live_eval.py`, scored as the engine's `scripts/eval_run.py` scores its own path):
+**Measured on `brs1-birth-all-errors`** (`family_room/live_eval.py`, scored as the engine's `scripts/eval_run.py` scores its own path): 5 runs of two readings at once, 10 readings. They ran with `LIVE_SHARED_GLIMMER=1` and with Muse Glimmer's answers kept from earlier readings, so a first reading on a new computer takes longer.
 
-| | Live |
+| | 10 live readings |
 |---|---|
-| Planted findings found | `<measured>` of 7 |
-| Total | `<measured>` against $1,596.53 |
-| False findings | `<measured>` |
-| Cost | `<measured>` |
-| Time | `<measured>` |
+| Total $1,596.53 | 10 of 10 |
+| Wrong sums or deadlines | 0 |
+| False findings | 0 |
+| Planted findings found | 7 of 7 in 2 readings, 6 of 7 in 8 |
+| A prepared answer to "they say the discount is only for uninsured patients" | 10 of 10 |
+| Cost per run, both readings, before the marked sheet | $0.71 to $0.85 |
+| Time per run | 310 to 366 s |
+
+In those 8 readings the seventh finding, newborn care filed on the mother's member ID, came back under "worth asking", and the score does not count it as found.
+
+All of this was checked on one fictional pack, the one the reading rules were written for, so other bills can still be misread.
 
 ## Reproducing: what to know
 

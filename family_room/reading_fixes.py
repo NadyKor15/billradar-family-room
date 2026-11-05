@@ -15,8 +15,7 @@ in `problems`, so a reading says what was corrected.
      patient share while its twin and every other line have none: that is the balance, not the line's share. If any
      other line has a share, zero included, the shares were printed and it stays.
 
-These come from the misses of 8 readings of one fictional pack on 2026-11-05, see LIVE-MEASURE in the README. They are not a
-claim about other papers.
+They were written for one fictional pack and checked on it alone. They are not a claim about other papers.
 """
 from __future__ import annotations
 
