@@ -2,7 +2,8 @@
 
 Plays the humans through Mattermost's own API (the same calls its web client makes) and waits for the
 agents' real answers. Approval cards are answered with Switch's text form ("A1 1"); in the video the
-same cards are tapped. No API keys: the engine replays its fictional sample pack.
+same cards are tapped. No API keys: the engine replays its fictional sample pack. With LIVE=1 the reader
+reads it with models, which takes minutes, so the wait for its answer is longer (READER_WAIT_S).
 
   python -m family_room.demo            whole story
   python -m family_room.demo show       what each room holds now
@@ -24,6 +25,11 @@ PATIENT = os.environ.get("PATIENT", "nadya")
 HELPER = os.environ.get("HELPER", "alex")
 REMINDER_WAIT = float(os.environ.get("REMINDER_AFTER_S", "60")) + 10
 LIVE_TIMEOUT = float(os.environ.get("AGENTS_LIVE_TIMEOUT_S", "90"))
+
+
+def reader_wait(env=os.environ) -> float:
+    """Seconds to wait for the reader's answer to the papers: 60 for the replay, an hour for a live reading."""
+    return float(env.get("READER_WAIT_S") or (3600 if env.get("LIVE") == "1" else 60))
 
 
 class AgentsNotLive(TimeoutError):
@@ -77,11 +83,13 @@ class Story:
         data = self.mm[who].call("GET", f"/api/v4/channels/{self.ch(room)}/posts?since={since}")
         return sorted(data["posts"].values(), key=lambda p: p["create_at"])
 
-    def wait(self, who: str, room: str, since: int, pattern: str, timeout: float = 60) -> dict:
+    def wait(self, who: str, room: str, since: int, pattern: str, timeout: float = 60, abort: str | None = None) -> dict:
         rx = re.compile(pattern, re.S)
         end = time.time() + timeout
         while time.time() < end:
             for p in self.posts(who, room, since):
+                if abort and p["create_at"] > since and re.search(abort, p["message"]):
+                    raise SystemExit(f"the reader said in {room}: {p['message']}")
                 if p["create_at"] > since and rx.search(p["message"]):
                     print(f"{utcnow()}  {'agent':>11} @ {room}: {p['message'][:160].replace(chr(10), ' / ')}")
                     return p
@@ -118,8 +126,8 @@ class Story:
         files = [(p.name, p.read_bytes(), mimetypes.guess_type(p.name)[0] or "application/octet-stream")
                  for p in sorted(d.iterdir()) if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".pdf")]
         t = self.say(PATIENT, f"{PATIENT}-papers", "@reader here are the papers from the hospital", files)
-        self.wait(PATIENT, f"{PATIENT}-papers", t, r"may come off")
-        self.wait(PATIENT, "family", t, r"may come off")
+        self.wait(PATIENT, f"{PATIENT}-papers", t, r"may come off", timeout=reader_wait(), abort=r"^Live reading stopped")
+        self.wait(PATIENT, "family", t, r"may come off", timeout=reader_wait())
         cards = self.cards(t, 5)
         for title, code in cards.items():
             print(f"{'':>13} card {code}: {title}")

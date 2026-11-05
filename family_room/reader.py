@@ -5,6 +5,10 @@ the photos through Switch's media route, runs BillRadar (pinned engine, MCP stdi
 numbers in the owner's room, asks the owner by approval card before anything personal moves, and
 posts to the handoff room only messages that pass the strict schema and the PII gate.
 
+By default it replays the engine's recorded result for a recognised fictional pack. With LIVE=1 the
+same recognised files go through the engine's models instead, and files it does not recognise go
+nowhere in either mode. A live failure is said in the room; it never falls back to the recording.
+
 Run: python -m family_room.reader   (reads state/reader.json only)
 """
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import re
 import threading
 import time
 import uuid
@@ -20,8 +25,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable
 
-from family_room import handoff, state
-from family_room.engine import Engine, EngineError, match_pack, profile, sha256
+from family_room import handoff, live, state
+from family_room.engine import (JOURNAL, Engine, EngineError, EngineTimeout, engine_log, live_args, match_pack, profile,
+                                sha256)
 from family_room.pii import LONG_DIGITS, Gate, PrivacyError
 from family_room.switch import Agent
 
@@ -32,6 +38,8 @@ WINDOW_S = 120          # an album's files may precede the @reader message by th
 BUFFER_MAX = 50         # unaddressed owner files kept per room
 NO_PAPERS = ("I see no papers from you in the last 2 minutes. Post photos or PDFs here as files and "
              "mention @reader within 2 minutes.")
+LIVE_STOPPED = "Live reading stopped: {why} I am not showing a recording instead. Nothing went to the family room."
+SPEND_CAP = re.compile(r"SpendCapReached|would pass (?:the|today's) \$")  # the engine's exception and its wording
 TIME_KEYS = ("created_at", "timestamp", "ts", "sent_at", "occurred_at", "origin_server_ts")
 
 
@@ -143,8 +151,10 @@ class Reader:
         self.handoff_room = st["handoff_room"]
         self.coordinator = st.get("coordinator_name", "coordinator")
         self.session = st.get("session_id") or str(uuid.uuid4())
+        self.live = live.enabled()
         self.engine = Engine()
         self.packs = self.engine.packs()
+        self.live_slot = threading.Lock()       # one live reading at a time
         self.cases: dict[str, dict] = {}        # our case ref -> case
         self.cards: dict[str, dict] = {}        # request_id -> what the card decides
         self.lock = threading.Lock()
@@ -186,17 +196,86 @@ class Reader:
 
     # ── papers → case ────────────────────────────────────────────────────────
     def papers(self, room: str, files: list[dict]) -> None:
-        owner = self.private[room]
-        hashes = set()
+        blobs = {}
         for a in files:
-            hashes.add(sha256(self.agent.media(room, a["mxc"])))
-        pack, why = match_pack(hashes, self.packs)
+            data = self.agent.media(room, a["mxc"])
+            blobs[sha256(data)] = data
+        pack, why = match_pack(set(blobs), self.packs)
         if pack is None:
+            tail = ("Live reading takes only those packs, so nothing went to a model." if self.live else
+                    "Reading new papers needs a live model, which is off in this demo.")
             self.agent.post(room, f"I read {len(files)} file(s), but they are not one of BillRadar's fictional "
-                                  f"sample packs ({why}). Reading new papers needs a live model, which is off in "
-                                  "this demo. Nothing left this room.")
+                                  f"sample packs ({why}). {tail} Nothing left this room.")
             return
-        a = self.engine.call("analyze_case", fictional=True, sample_pack=pack)
+        if self.live:
+            self.read_live(room, pack, blobs)
+        else:
+            self.present(room, pack, len(files), self.engine.call("analyze_case", fictional=True, sample_pack=pack))
+
+    def read_live(self, room: str, pack: str, blobs: dict[str, bytes]) -> None:
+        """The posted files of a recognised fictional pack through the engine's models. Runs on the papers
+        thread, so the agent keeps handling other events; a second reading while this one runs is refused."""
+        if not self.live_slot.acquire(blocking=False):
+            self.agent.post(room, "A live reading is already running. Post these again when it has finished. "
+                                  "Nothing new went to a model.")
+            return
+        keep_slot = False
+        try:
+            keep_slot = self._read_live(room, pack, blobs)
+        except Exception:  # noqa: BLE001 - said in the room; the agent stays up
+            log.exception("live reading failed (pack %s)", pack)
+            self.agent.post(room, LIVE_STOPPED.format(why="something failed on the reader's side; the reader's log has it."))
+        finally:
+            if not keep_slot:
+                self.live_slot.release()
+
+    def _read_live(self, room: str, pack: str, blobs: dict[str, bytes]) -> bool:
+        """True keeps the live slot taken: after a timeout the engine may still be spending."""
+        n = len(blobs)
+        why = live.not_ready()
+        if why:
+            log.error("live reading not started: %s", why)
+            self.agent.post(room, LIVE_STOPPED.format(why=why))
+            return False
+        args = live_args(pack, blobs)
+        self.agent.post(room, f"Reading {n} file{'' if n == 1 else 's'} live (fictional pack {pack}). This takes "
+                              "minutes. The result will come here.")
+        mark, log_mark, began = live.journal_mark(JOURNAL), live.journal_mark(engine_log()), time.monotonic()
+        stopped, a, engine_busy = None, None, False
+        try:
+            a = self.engine.call("analyze_case", _timeout=live.read_timeout(), **args)
+        except EngineTimeout:
+            log.exception("live reading timed out (pack %s)", pack)
+            engine_busy = True
+            stopped = (f"no result after {live.read_timeout():.0f} s, and the engine may still be working. "
+                       "Restart the reader before trying again.")
+        except EngineError as exc:
+            told = live.text_since(engine_log(), log_mark)
+            log.exception("live reading failed in the engine (pack %s). The engine's log says: %s", pack, told[-2000:])
+            stopped = ("the spend cap was reached." if SPEND_CAP.search(f"{exc}\n{told}")
+                       else "the engine reported an error; the reader's log has it.")
+        seconds, stats = time.monotonic() - began, live.journal_since(JOURNAL, mark)
+        run = {"pack": pack, "files": n, "seconds": round(seconds, 1), "usd": stats["usd"], "calls": stats["calls"],
+               "models": stats["models"]}
+        if a is not None and a.get("replayed", True):
+            log.error("live reading came back replayed (pack %s)", pack)
+            stopped = "the engine answered from a recording, not from a model."
+        if stopped:
+            live.record_run({**run, "status": "stopped"})
+            self.agent.post(room, LIVE_STOPPED.format(why=stopped))
+            return engine_busy
+        live.record_run({**run, "status": "read", "engine_case": a["case_id"]})
+        try:
+            self.present(room, pack, n, a, how=live.how_read(pack, stats, seconds))
+        except Exception:  # noqa: BLE001 - e.g. the PII gate refusing a sentence read off a sheet
+            log.exception("live case %s could not be presented", a["case_id"])
+            self.agent.post(room, "The live reading finished, but the case could not be passed on, so the family room "
+                                  "got nothing. The reader's log has it.")
+        return False
+
+    def present(self, room: str, pack: str, n_files: int, a: dict, how: str | None = None) -> None:
+        """A finished reading, replayed or live: the owner's message, the cards, the de-identified case."""
+        owner = self.private[room]
         cid = a["case_id"]
         f = self.engine.call("get_findings", case_id=cid)
         letters = self.engine.call("list_letters", case_id=cid)["letters"]
@@ -217,14 +296,15 @@ class Reader:
                                "sources": o.get("sources", [])})
         case = {"ref": ref, "owner": owner, "room": room, "engine_id": cid, "pack": pack, "gate": gate,
                 "profile": prof, "findings": f, "letters": letters, "sheet": sheet, "objections": objections,
-                "files": len(files), "replayed": bool(a.get("replayed", True))}
+                "files": n_files, "replayed": bool(a.get("replayed", True))}
         with self.lock:
             self.cases[ref] = case
         total = cents(a["total_may_come_off"]) or 0
 
         # 1. what the owner sees, in the owner's own room (names are fine here: it is their room)
-        lines = [f"I read {len(files)} file{'' if len(files) == 1 else 's'} ({'replayed fictional sample' if case['replayed'] else 'live reading'}, "
-                 f"pack {pack}). {len(f['findings'])} findings, **{money(total)} may come off**."]
+        said = how or f"{'replayed fictional sample' if case['replayed'] else 'live reading'}, pack {pack}"
+        lines = [f"I read {n_files} file{'' if n_files == 1 else 's'} ({said}). "
+                 f"{len(f['findings'])} findings, **{money(total)} may come off**."]
         if a.get("apply_by"):
             lines.append(f"Apply for the hospital's financial assistance by **{a['apply_by']}**.")
         for x in f["findings"]:
@@ -248,7 +328,7 @@ class Reader:
                       [("approve", "Approve letter", "accept"), ("hold", "Not yet", "decline")])
 
         # 3. the strict, de-identified case for the coordinator
-        msg = {"v": 1, "type": "case", "case": ref, "replayed": case["replayed"], "sheets": len(files),
+        msg = {"v": 1, "type": "case", "case": ref, "replayed": case["replayed"], "sheets": n_files,
                "total_cents": total, "apply_by": a.get("apply_by"),
                "findings": [{"code": x["kind"], "cents": cents(x.get("amount")), "deadline": x.get("deadline"),
                              "refs": [{"doc": e["doc_id"], "line": e.get("line_no")} for e in x["evidence"][:12]]}
@@ -364,7 +444,13 @@ class Reader:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    Reader().run()
+    live.guard_logs()
+    reader = Reader()
+    if reader.live:
+        log.info("live mode on: daily spend cap $%.2f", live.spend_cap())
+        if why := live.not_ready():
+            log.error("live readings will be refused: %s", why)
+    reader.run()
 
 
 if __name__ == "__main__":
