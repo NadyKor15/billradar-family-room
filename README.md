@@ -26,7 +26,7 @@ git clone --recurse-submodules https://github.com/NadyKor15/billradar-family-roo
 make up       # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
 make demo     # the story above, ≈60 s
 make verify   # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
-make test     # 166 unit tests, no stand needed; the ones that use the engine skip until `make engine` has run
+make test     # 201 unit tests, no stand needed; the ones that use the engine skip until `make engine` has run
 make down     # stop everything (make wipe also drops the data)
 ```
 
@@ -98,7 +98,9 @@ Without keys the engine runs only its fictional sample packs and says so (REPLAY
 
 ## Live mode
 
-Off by default. `LIVE=1` and a Meta Model API key in the environment turn it on for both agents, and `deploy/agents.sh` passes each agent only its own part. Without `LIVE=1` neither agent gets any of these, even if the shell has them. `deploy/agents.sh start` refuses `LIVE=1` with no key.
+There are two modes. By default the reader replays the engine's recorded result for a recognised fictional pack, and neither agent calls a model. With `LIVE=1` and a Meta Model API key, the reader reads that pack with the engine's models: SAM 3.1 finds the sheets, Muse Spark reads them, Muse Wonder reviews the result. The coordinator asks Muse Spark which checked answer fits.
+
+`deploy/agents.sh` passes each agent only its own part. Without `LIVE=1` neither agent gets any of these, even if the shell has them. `deploy/agents.sh start` refuses `LIVE=1` with no key.
 
 ```
 export MODEL_API_KEY=...        # from your own secret store; it is never written to a file here
@@ -112,30 +114,32 @@ make verify
 |---|---|---|---|
 | `LIVE` | both | `1` turns live mode on | off |
 | `MODEL_API_KEY` | both | the key; reaches a process only through its environment | none |
-| `LIVE_SPEND_CAP_USD` | reader | daily ceiling, passed to the engine as `BILLRADAR_DAILY_SPEND_USD`; must be above 0 | 15 |
+| `LIVE_SPEND_CAP_USD` | reader | daily ceiling, passed to the reading as `BILLRADAR_DAILY_SPEND_USD`; must be above 0 | 15 |
 | `META_SPEND_CAP_USD` | reader | the engine's ceiling over all days | 40 |
-| `LIVE_READ_TIMEOUT_S` | reader | how long the reader waits for one reading | 3600 |
+| `LIVE_READ_TIMEOUT_S` | reader | how long one reading may run before it is stopped | 3600 |
 | `BILLRADAR_LLAMA_SERVER`, `BILLRADAR_GLIMMER_DIR` | reader | where llama-server and the Muse Glimmer weights are, if not on `PATH` and in `~/Models/Muse-Glimmer-30B-GGUF` | |
-| `BILLRADAR_SECOND_READ` | reader | `1` makes the engine read every sheet twice | 0 |
+| `BILLRADAR_SECOND_READ` | reader | `0` turns off the engine's second read | on |
 | `BILLRADAR_WONDER_REVIEW` | reader | `0` turns off Muse Wonder's review | on |
 | `CHOOSER_MAX_CALLS` | coordinator | model calls per process, then word overlap only | 50 |
 | `CHOOSER_TIMEOUT_S` | coordinator | seconds for one model call, then word overlap | 15 |
 | `READER_WAIT_S` | `make demo` | how long it waits for the reader's answer | 60, or 3600 with `LIVE=1` |
 
-**What goes to a model.** A live call happens only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and the engine is not called.
+**What goes to a model.** A live reading starts only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and no reading starts.
 
-- **The reader** gives the engine the posted files, in the pack's own order and under the pack's file names, plus the household size, income, insurance flag, policy and letterhead from the pack's `profile.json`. The engine sends the photos to SAM 3.1 to find sheets, sheets and PDFs to Muse Spark to read them, and its findings to Muse Wonder for review. It also reads each photographed sheet on this computer with Muse Glimmer, so it needs llama-server, the weights and about 32 GB of free memory; without them the reader refuses before anything is paid for.
+- **The reader** starts a child process (`family_room/live_read.py`) and gives it the pack's name and the sha256 list, never the bytes. The child reads only the pack's own files on that list, checks that the pack says `"fictional": true`, and refuses otherwise, so a file from outside the pack cannot get to a model. It runs the engine's `pipeline.run` with the pack's own profile and date, in the engine's private mode: a blurred copy of each photo goes to SAM 3.1, the closed sheets and PDF pages to Muse Spark, and the findings and letters to Muse Wonder. A new pack without a profile is not read.
+- **The closing step** reads each sheet on this computer with Muse Glimmer. On this pack it first looks for a recorded answer to the same picture. The recordings match byte for byte only where the pictures come out exactly the same: on the Mac that made them all of them matched, and on another Mac with the same package versions they did not. A sheet with no recording needs Muse Glimmer itself: llama-server, the weights and about 32 GB of free memory. Without those the reading stops at the first such sheet and says so.
+- **The MCP server** has no key and no live switch in either mode. It only reads finished cases.
 - **The coordinator** sends what the relative wrote and the numbered list of `they_say` strings, on a stdlib HTTP call to the same endpoint and model as the engine's reader. Long digit runs, media handles, phone numbers and US dates are dropped first. A name someone typed is not a shape, so it does go through.
 
 `python -m family_room.telegram wire` and `unwire` restart the agents with the caller's environment, so run them with the same variables to stay live.
 
 **What the coordinator's model can and cannot do.** It can name one id from the list, or none. Its reply is parsed for that one field, and anything else counts as a failed call and falls back to word overlap. An id that is not in the list counts as none. It cannot post a word: the sentence in the family room is the reader's checked answer with its quote, built by code. "Show me Nadya's papers" is handled before the model is asked, so the 403 does not depend on it. Each call adds a line to `state/model_calls.jsonl`: time, model, status, chosen id, seconds, and no message text. These calls are not in the engine's spend book; `CHOOSER_MAX_CALLS` is their limit.
 
-**When something fails.** The room hears "Live reading stopped" with the reason, the cap included, and the family room gets nothing. The reader never falls back to the recording and never claims a live result it did not get. One reading runs at a time. After a timeout the reader refuses new readings until it is restarted, because the engine may still be spending. The engine's own stderr goes to `state/engine-live.log`.
+**When something fails.** The room hears "Live reading stopped" with the reason, the cap and a missing Muse Glimmer included, and the family room gets nothing. The reader never falls back to the recording and never claims a live result it did not get. One reading runs at a time. A timeout stops the child and everything it started, and only those. The child stops itself if the reader goes away.
 
-**What differs from the replay.** The engine's entry point for posted papers takes a household, not the pack's whole profile, and it uses today's date. So a live case has no people in its profile: the two "send the baby's insurance details" findings do not appear, and letters are signed "[your name]". Letters carry today's date, while the sample's application deadline stays 2026-04-01, which has already passed. A live run also writes its answers to `tests/fixtures/recordings/` and `runs/` inside the submodule's working copy.
+**What a live run leaves.** `state/live_runs.jsonl` has one line per reading with its cost, seconds, models and the engine's list of problems, so a partial failure is visible. `state/engine-live.log` has the child's stderr, and the models' raw answers go to `state/live-recordings/`. The finished case goes to `runs/` in the engine's folder, which its git ignores, so the submodule stays clean (`tests/test_live_dryrun.py` checks `git status` on a clone of it).
 
-**Measured on `brs1-birth-all-errors`** (`family_room/live_eval.py`):
+**Measured on `brs1-birth-all-errors`** (`family_room/live_eval.py`, scored as the engine's `scripts/eval_run.py` scores its own path):
 
 | | Live |
 |---|---|
