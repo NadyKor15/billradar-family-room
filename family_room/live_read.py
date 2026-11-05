@@ -30,6 +30,8 @@ import traceback
 from datetime import date
 from pathlib import Path
 
+from family_room import reading_fixes
+
 PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png"}
 EXIT_FAILED, EXIT_REFUSED, EXIT_GLIMMER, EXIT_SPEND_CAP = 1, 2, 3, 4
 PARENT_CHECK_S = 2.0
@@ -82,11 +84,13 @@ def use_glimmer_cache(local_reader, folder: Path) -> None:
 
 
 def read_pack(pack: str, wanted: list[str]) -> dict:
-    from billradar import agent_api, local_reader, pipeline, providers
+    from billradar import agent_api, checks, local_reader, pipeline, providers
     from billradar.case import Profile
 
     raw, photos, pdfs = choose_papers(agent_api.PACKS, pack, wanted)
     use_glimmer_cache(local_reader, glimmer_cache())
+    corrected: list[str] = []
+    reading_fixes.install(checks, pdfs, corrected)
     case_id = "a" + secrets.token_hex(6)
     client = providers.make_client()
     client.record_to = Path(os.environ["LIVE_RECORD_DIR"]) if os.environ.get("LIVE_RECORD_DIR") else None
@@ -101,7 +105,7 @@ def read_pack(pack: str, wanted: list[str]) -> dict:
     (d / "meta.json").write_text(json.dumps({"source": source, "replayed": run_.replayed,
                                              "checked": run_.verdict.checked if run_.verdict else 0}))
     return {"case_id": case_id, "source": source, "replayed": run_.replayed,
-            **agent_api._summary(run_.case, run_.report), "problems": list(run_.problems)}
+            **agent_api._summary(run_.case, run_.report), "problems": list(run_.problems) + [f"corrected: {x}" for x in corrected]}
 
 
 def failure_kind(exc: BaseException) -> tuple[str, int]:
