@@ -168,7 +168,7 @@ def how_read(pack: str, stats: dict, seconds: float, readings: int = 1) -> str:
 
 
 def record_run(row: dict) -> None:
-    """One line per live reading in state/live_runs.jsonl: ids, counts, cost, seconds; no message text, no key."""
+    """One line per live run in state/live_runs.jsonl: ids, counts, cost, seconds; no message text, no key."""
     state.STATE.mkdir(parents=True, exist_ok=True)
     with (state.STATE / "live_runs.jsonl").open("a") as f:
         f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **row}) + "\n")

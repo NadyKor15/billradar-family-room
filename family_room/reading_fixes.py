@@ -1,12 +1,12 @@
-"""Four known slips of a model's reading, corrected before the engine's checks run. Live mode only, in the reading's child
+"""Four rules applied to a model's reading before the engine's checks run. Live mode only, in the reading's child
 process. The engine's files stay as they are at the pinned commit: `install` wraps the one call between reading and checks.
 
-Each rule moves a value the model read onto what the paper itself shows, or takes away what is not a service line. None adds
-money: the checks still work out every sum, and the engine's verifier still has the last word. A rule that fires leaves a line
-in `problems`, so a reading says what was corrected.
+Each rule moves a value the model read, or takes away what is not a service line. None writes a sum, but a rule can move the
+total, up or down, by changing what the checks count: they still work out every sum, and the engine's verifier, which sees the
+corrected reading, has the last word. A rule that fires leaves a line in `problems`, so a reading says what was corrected.
 
   1. A PDF bill whose provider reads as a person ("LAST, FIRST M.") and whose printed header names the hospital, with no
-     practice named there, is the hospital's bill. (A doctor printed on the statement was read as who bills.) Being
+     practice named there, is the hospital's bill. (A doctor printed on a statement can be read as who bills.) Being
      mentioned lower on the page, as the place of service, is not enough: a doctor's bill must stay a doctor's bill.
   2. On a summary statement, a line that says "total" and repeats the sheet's total charges to the cent is not a service,
      and two reads disagreeing whether such a sheet has any line at all is no doubt about its money.
