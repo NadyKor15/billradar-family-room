@@ -4,17 +4,18 @@ Without API keys the engine runs only its fictional sample packs (results say RE
 recognises a pack by the sha256 of the files a person posted, so `make demo` needs no keys and no
 model, and nothing here pretends a live reading happened.
 
-With LIVE=1 the engine process gets the live switches, the key and a daily spend cap through its
-environment (`engine_env`), and `live_args` builds the reading of a recognised fictional pack. Files
-that are not in a fictional pack cannot get through `live_args`.
+The long-lived MCP server never has a key or a live switch, in either mode: it reads finished cases.
+With LIVE=1 a reading runs as a child process (`run_live_read`, family_room/live_read.py), and only
+that child gets the environment of `live_env`.
 """
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
 import os
+import signal
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -27,8 +28,8 @@ ENGINE = Path(os.environ.get("BILLRADAR_ENGINE", ROOT / "vendor" / "billradar-me
 PACKS = ENGINE / "eval" / "packs" / "work"
 JOURNAL = ENGINE / "runs" / "requests.jsonl"
 PAPER_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
-DEFAULT_CALL_TIMEOUT_S = 120.0
-# Passed from the reader's environment to the engine when set, in live mode only.
+TERM_GRACE_S = 10.0
+# Passed from the reader's environment to a live reading when set.
 LIVE_PASS_THROUGH = (live.KEY_ENV, "META_SPEND_CAP_USD", "BILLRADAR_SECOND_READ", "BILLRADAR_WONDER_REVIEW",
                      "BILLRADAR_LLAMA_SERVER", "BILLRADAR_GLIMMER_DIR", "BILLRADAR_GLIMMER_PORT")
 
@@ -63,56 +64,71 @@ def profile(pack: str) -> dict:
 
 
 def engine_env() -> dict[str, str]:
-    """The whole environment of the engine process: no model keys and no live switches unless LIVE=1.
+    """The whole environment of the MCP server: no model keys and no live switches, in either mode."""
+    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp")}
 
-    In live mode the second read stays off unless asked for. We send PDFs as they are (`private=False`), and with
-    the second read on, the engine's last check needs every sum printed on a sheet it read itself, which it does
-    not do for those PDFs: a sum resting on a hospital PDF would lose its amount."""
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp")}
-    if live.enabled():
-        env |= {"BILLRADAR_LIVE": "1", "BILLRADAR_AGENT_LIVE": "1", "BILLRADAR_DAILY_SPEND_USD": str(live.spend_cap()),
-                "BILLRADAR_SECOND_READ": "0"}
-        env |= {k: os.environ[k] for k in LIVE_PASS_THROUGH if os.environ.get(k)}
-    return env
+
+def live_env() -> dict[str, str]:
+    """The whole environment of one live reading. The second read and Muse Wonder stay as they are on the measured
+    path; BILLRADAR_SECOND_READ or BILLRADAR_WONDER_REVIEW set by whoever started the reader are respected."""
+    env = engine_env() | {"BILLRADAR_LIVE": "1", "BILLRADAR_AGENT_LIVE": "1", "BILLRADAR_DAILY_SPEND_USD": str(live.spend_cap()),
+                          "PYTHONPATH": str(ROOT), "LIVE_RECORD_DIR": str(state.STATE / "live-recordings")}
+    return env | {k: os.environ[k] for k in LIVE_PASS_THROUGH if os.environ.get(k)}
 
 
 def engine_log() -> Path:
-    """Where the engine process's stderr goes in live mode. The MCP layer answers an unexpected failure with
-    "Error executing tool X" only; the reason, such as SpendCapReached, is in this file."""
+    """Where a live reading's stderr goes."""
     return state.STATE / "engine-live.log"
 
 
-class NotFromPack(ValueError):
-    """A file is about to go to a model and it is not a paper of a fictional pack."""
+def live_read_command() -> list[str]:
+    return [sys.executable, "-m", "family_room.live_read"]
 
 
-def live_args(pack: str, blobs: dict[str, bytes]) -> dict[str, Any]:
-    """Arguments of `analyze_case` for the posted files of one fictional pack, keyed by their sha256.
+class LiveReadFailed(RuntimeError):
+    """kind: spend_cap, glimmer, refused, timeout or failed."""
 
-    Second lock behind `match_pack`: every file must be a paper of this pack and the pack must say it is
-    fictional, or nothing is built. Files go in the pack's own order, which sets the sheet numbers
-    (S1.., D1..), and under the pack's file names, never a name someone typed."""
-    papers = pack_files(pack)
-    raw = json.loads((PACKS / pack / "profile.json").read_text())
-    if raw.get("fictional") is not True:
-        raise NotFromPack(f"{pack} is not marked fictional")
-    if not blobs or set(blobs) - set(papers):
-        raise NotFromPack(f"not every file is a paper of {pack}")
-    photos, files = [], []
-    for digest, path in papers.items():
-        if digest not in blobs or sha256(blobs[digest]) != digest:
+    def __init__(self, kind: str, detail: str = ""):
+        super().__init__(f"{kind}: {detail}" if detail else kind)
+        self.kind = kind
+
+
+def stop_group(proc: subprocess.Popen) -> None:
+    """The child leads its own group (start_new_session), so this reaches it and what it started, nobody else."""
+    for sig, wait in ((signal.SIGTERM, TERM_GRACE_S), (signal.SIGKILL, TERM_GRACE_S)):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            break
+        try:
+            proc.wait(wait)
+            break
+        except subprocess.TimeoutExpired:
             continue
-        coded = base64.b64encode(blobs[digest]).decode("ascii")
-        if path.suffix.lower() == ".pdf":
-            files.append({"name": path.name, "base64": coded})
-        else:
-            photos.append(coded)
-    if len(photos) + len(files) != len(blobs):
-        raise NotFromPack(f"a file does not match its sha256 in {pack}")
-    prof = raw["profile"]
-    return {"fictional": True, "photos": photos, "files": files, "household_size": int(prof["household_size"]),
-            "annual_income": str(prof["annual_income"]), "insured": bool(prof.get("insured", True)),
-            "policy_id": raw["policy_id"], "letterhead": raw.get("letterhead", "")}
+    if proc.stdout:
+        proc.stdout.close()
+
+
+def run_live_read(pack: str, hashes: set[str], timeout: float) -> dict[str, Any]:
+    """One live reading in a child process. Blocks the calling thread; raises LiveReadFailed on anything but a result."""
+    state.STATE.mkdir(parents=True, exist_ok=True)
+    request = json.dumps({"pack": pack, "sha256": sorted(hashes)}).encode()
+    with engine_log().open("ab") as err:
+        proc = subprocess.Popen(live_read_command(), cwd=str(ENGINE), env=live_env(), stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=err, start_new_session=True)
+    try:
+        out, _ = proc.communicate(request, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stop_group(proc)
+        raise LiveReadFailed("timeout", f"no result in {timeout:.0f} s") from exc
+    lines = out.decode("utf-8", "replace").strip().splitlines()
+    try:
+        result = json.loads(lines[-1])
+    except (IndexError, ValueError):
+        result = {}
+    if proc.returncode != 0 or "case_id" not in result:
+        raise LiveReadFailed(result.get("error", "failed"), f"exit {proc.returncode}")
+    return result
 
 
 class Engine:
@@ -139,12 +155,8 @@ class Engine:
         from mcp.client.stdio import stdio_client
         params = StdioServerParameters(command=self.python, args=["-m", "billradar.mcp_server"],
                                        cwd=str(ENGINE), env=engine_env())
-        errlog = sys.stderr
         try:
-            if live.enabled():
-                state.STATE.mkdir(parents=True, exist_ok=True)
-                errlog = engine_log().open("a")
-            async with stdio_client(params, errlog=errlog) as (r, w):
+            async with stdio_client(params) as (r, w):
                 async with ClientSession(r, w) as s:
                     await s.initialize()
                     self._session = s
@@ -154,13 +166,9 @@ class Engine:
             self._error = exc
             self._ready.set()
 
-    def call(self, tool: str, _timeout: float = DEFAULT_CALL_TIMEOUT_S, **args) -> dict[str, Any]:
+    def call(self, tool: str, **args) -> dict[str, Any]:
         fut = asyncio.run_coroutine_threadsafe(self._session.call_tool(tool, args), self.loop)
-        try:
-            res = fut.result(_timeout)
-        except TimeoutError as exc:
-            fut.cancel()
-            raise EngineTimeout(f"{tool}: no answer in {_timeout:.0f} s") from exc
+        res = fut.result(120)
         if getattr(res, "is_error", False) or getattr(res, "isError", False):
             raise EngineError(res.content[0].text if res.content else tool)
         return res.structured_content or json.loads(res.content[0].text)
@@ -171,7 +179,3 @@ class Engine:
 
 class EngineError(RuntimeError):
     pass
-
-
-class EngineTimeout(EngineError):
-    """We stopped waiting. The engine process may still be working on the call."""

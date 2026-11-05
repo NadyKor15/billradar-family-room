@@ -6,7 +6,8 @@
 #
 # Live mode is off unless LIVE=1 is set by whoever runs this script. Then each agent gets only its own part:
 #   both         LIVE, MODEL_API_KEY
-#   reader       LIVE_SPEND_CAP_USD, LIVE_READ_TIMEOUT_S and the engine's settings below
+#   reader       LIVE_SPEND_CAP_USD, LIVE_READ_TIMEOUT_S and the engine's settings below (it hands them to one reading's
+#                child process; its long-lived MCP server gets none of them)
 #   coordinator  CHOOSER_MAX_CALLS, CHOOSER_TIMEOUT_S
 # Without LIVE=1 neither agent gets any of them. Values pass through the environment, never on a command line.
 set -euo pipefail

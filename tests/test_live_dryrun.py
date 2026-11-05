@@ -1,10 +1,17 @@
-"""The whole live path on the real engine over real MCP stdio, with one thing replaced: the model client inside
-the engine process answers from the pack's own files (and the on-computer OCR returns nothing). No network, no key
-that works. Needs the engine, so it runs in the engine's environment."""
+"""The whole live path on the real engine, in a throwaway clone of it: the child runs the real `live_read` and
+`pipeline.run` on the measured path, and the unmodified MCP server gives the finished case to the reader. One thing is
+replaced in the child: the model transport. requests.post raises there, Muse Glimmer's folder points nowhere and no
+server starts, so nothing here can reach a model or the network. Needs the engine, so it runs in the engine's environment.
+
+Transports:  stub      the pack's generator answers for SAM and Spark, and Glimmer answers empty: every piece stays closed,
+                       so this shows the path and not the sums
+             recorded  the engine's recordings of this pack, Glimmer's included. Their hashes are of images rendered on the
+                       machine that recorded them; where they do not match, the test skips and says so."""
 import json
 import os
+import shutil
+import subprocess
 import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -15,35 +22,66 @@ pytest.importorskip("mcp")
 import billradar  # noqa: E402
 
 from family_room import engine as E  # noqa: E402
-from family_room import handoff, live, live_eval  # noqa: E402
+from family_room import handoff, live_eval  # noqa: E402
 from family_room import reader as R  # noqa: E402
 from family_room.pii import Gate  # noqa: E402
 
 ENGINE_ROOT = Path(billradar.__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]
 PACK = "brs1-birth-all-errors"
 ROOM, OWNER, HANDOFF = "room-nadya", "nadya", "room-handoff"
+NO_RECORDING = "is not in this pack's recorded Muse Glimmer answers"
 
-SERVER = """
-import json, sys
-from pathlib import Path
-tmp = Path(sys.argv[1]); mode = sys.argv[2]
-from billradar import agent_api, example, mcp_server, providers, redact
-from billradar.meta_client import MetaClient, SpendCapReached
-redact.ocr = lambda img: []
-agent_api.RUNS = tmp / "runs"
-class Answers(example.PackAnswers):
-    live = True
+CHILD = """
+import os, sys
+sys.path.insert(0, os.getcwd())
+mode = sys.argv[1]
+import requests
+def no_network(*a, **k):
+    raise AssertionError("a test reached for the network")
+requests.post = requests.get = no_network
+from billradar import agent_api, example, local_reader
+from billradar.meta_client import MetaClient, ReplayTransport, SpendCapReached
+class Stub(example.PackAnswers):
+    live = mode != "replay"
+    def __init__(self):
+        super().__init__(agent_api.PACKS / %r)
     def events(self, body):
         if mode == "cap":
             raise SpendCapReached("$0.5000 more would pass today's $15.00 ceiling ($14.80 so far)")
         if mode == "boom":
             raise RuntimeError("upstream exploded")
         return super().events(body)
-def client():
-    return MetaClient(transport=Answers(agent_api.PACKS / %r), record_to=None, journal=tmp / "journal.jsonl")
-providers.make_client = client
-mcp_server.main()
+class Recorded(ReplayTransport):
+    live = True
+if mode in ("stub", "replay"):
+    class Empty:
+        def ask(self, prompt, jpeg):
+            return ""
+    local_reader._server = Empty()
+if mode == "glimmer":
+    local_reader.RECORDINGS = local_reader.RECORDINGS / "not-here"
+MetaClient._default_transport = staticmethod(lambda: Recorded() if mode == "recorded" else Stub())
+from family_room import live_read
+sys.exit(live_read.main())
 """ % PACK
+
+
+def git_status(path):
+    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+    return subprocess.run(["git", "status", "--porcelain"], cwd=path, env=env, capture_output=True, text=True, check=True).stdout
+
+
+@pytest.fixture(scope="session")
+def engine_clone(tmp_path_factory):
+    """A clone of the engine at its pinned commit, with the fetched policies it needs (ignored by its git)."""
+    if not (ENGINE_ROOT / ".git").exists() or not (ENGINE_ROOT / ".cache" / "policies").exists():
+        pytest.skip("needs the engine's git checkout and its fetched policies")
+    target = tmp_path_factory.mktemp("engine") / "billradar-meta"
+    subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(ENGINE_ROOT), str(target)], check=True,
+                   env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    shutil.copytree(ENGINE_ROOT / ".cache", target / ".cache")
+    return target
 
 
 class FakeAgent:
@@ -64,31 +102,31 @@ class FakeAgent:
         self.cards.append(title)
 
 
-def papers():
-    return {f"mxc://{p.name}": p.read_bytes() for p in sorted((ENGINE_ROOT / "eval" / "packs" / "work" / PACK).iterdir())
+def papers(engine):
+    return {f"mxc://{p.name}": p.read_bytes() for p in sorted((engine / "eval" / "packs" / "work" / PACK).iterdir())
             if p.suffix.lower() in E.PAPER_SUFFIXES}
 
 
-def build(monkeypatch, tmp_path, mode):
-    wrapper = tmp_path / f"python-{mode}"
-    (tmp_path / "server.py").write_text(SERVER)
-    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" -B "{tmp_path}/server.py" "{tmp_path}" {mode}\n')
-    wrapper.chmod(0o755)
+def build(monkeypatch, tmp_path, engine, mode):
+    (tmp_path / "child.py").write_text(CHILD)
     monkeypatch.setenv("LIVE", "1")
     monkeypatch.setenv("MODEL_API_KEY", "not-a-real-key-value")
-    monkeypatch.setenv("BILLRADAR_WONDER_REVIEW", "0")        # the fake answers are readings, not reviews
-    monkeypatch.setattr(E, "ENGINE", ENGINE_ROOT)
-    monkeypatch.setattr(E, "PACKS", ENGINE_ROOT / "eval" / "packs" / "work")
-    monkeypatch.setattr(R, "JOURNAL", tmp_path / "journal.jsonl")
+    monkeypatch.setenv("BILLRADAR_GLIMMER_DIR", str(tmp_path / "no-glimmer"))  # on any miss: NotAvailable, never a server
+    monkeypatch.delenv("BILLRADAR_LLAMA_SERVER", raising=False)
+    if mode == "stub" or mode == "replay":
+        monkeypatch.setenv("BILLRADAR_WONDER_REVIEW", "0")     # the generator's answers are readings, not reviews
+    monkeypatch.setattr(E, "ENGINE", engine)
+    monkeypatch.setattr(E, "PACKS", engine / "eval" / "packs" / "work")
+    monkeypatch.setattr(E, "ROOT", ROOT)
+    monkeypatch.setattr(E, "live_read_command", lambda: [sys.executable, "-B", str(tmp_path / "child.py"), mode])
+    monkeypatch.setattr(R, "JOURNAL", engine / "runs" / "requests.jsonl")
     monkeypatch.setattr(R.state, "STATE", tmp_path / "state")
-    monkeypatch.setattr(R, "profile", E.profile)
-    monkeypatch.setattr(live, "glimmer_ready", lambda: True)
     st = {"id": "a1", "api_key": "k", "connection_id": "c1", "private_rooms": {ROOM: OWNER, "room-alex": "alex"},
           "handoff_room": HANDOFF}
     monkeypatch.setattr(R.state, "load", lambda name: st)
-    monkeypatch.setattr(R, "Engine", lambda: E.Engine(python=str(wrapper)))
+    monkeypatch.setattr(R, "Engine", lambda: E.Engine(python=sys.executable))
     r = R.Reader()
-    r.agent = FakeAgent(papers())
+    r.agent = FakeAgent(papers(engine))
     return r
 
 
@@ -96,75 +134,115 @@ def said(r):
     return "\n".join(t for _, t in r.agent.posts)
 
 
-def test_live_path_end_to_end_over_mcp_stdio(monkeypatch, tmp_path):
-    r = build(monkeypatch, tmp_path, "ok")
+def posted(r):
     r.papers(ROOM, [{"mxc": m} for m in r.agent.papers])
-    assert r.agent.posts[0][1].startswith(f"Reading 10 files live (fictional pack {PACK})")
+
+
+def last_run():
+    return json.loads((R.state.STATE / "live_runs.jsonl").read_text().splitlines()[-1])
+
+
+def test_path_from_child_to_family_message_and_the_submodule_stays_clean(monkeypatch, tmp_path, engine_clone):
+    assert git_status(engine_clone) == ""
+    r = build(monkeypatch, tmp_path, engine_clone, "stub")
+    posted(r)
+    assert r.agent.posts[0][1].startswith(f"Reading 10 files live (fictional pack {PACK})"), said(r)
     first = r.agent.posts[1][1].split("\n")[0]
-    assert first.startswith(f"I read 10 files (live: SAM 3.1 + Muse Spark, fictional pack {PACK}, ")
+    assert first.startswith(f"I read 10 files (live: SAM 3.1 + Muse Spark, fictional pack {PACK}, "), first
+    case = r.agent.handoffs[0]
+    assert case["replayed"] is False
+    assert Gate.from_profile(E.profile(PACK)).hits(json.dumps(case)) == []
+    run = last_run()
+    assert run["status"] == "read" and run["calls"] > 0
+    assert run["problems"], "with every piece closed the engine lists problems, and they must reach live_runs.jsonl"
+    done = engine_clone / "runs" / "agents" / run["engine_case"]
+    assert {"case.json", "report.json", "meta.json"} <= {p.name for p in done.iterdir()}
+    assert json.loads((done / "meta.json").read_text())["replayed"] is False
+    saved = json.loads((done / "case.json").read_text())
+    assert saved["today"] == "2026-03-02" and saved["demo"] is True   # the pack's date, and the MCP tools keep it
+    # the models' answers went to state/, the engine's git sees nothing, and the journal still priced the calls
+    assert list((R.state.STATE / "live-recordings").glob("sam-3.1-*.jsonl"))
+    assert git_status(engine_clone) == ""
+    assert (engine_clone / "runs" / "requests.jsonl").exists()
+
+
+def test_control_the_status_check_can_light(engine_clone):
+    planted = engine_clone / "tests" / "fixtures" / "recordings" / "planted-by-test.jsonl"
+    planted.write_text("{}\n")
+    try:
+        assert "planted-by-test" in git_status(engine_clone)
+    finally:
+        planted.unlink()
+    assert git_status(engine_clone) == ""
+
+
+def test_the_measured_path_gives_the_recorded_result(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "recorded")
+    posted(r)
+    if NO_RECORDING in said(r):
+        pytest.skip("Muse Glimmer's recordings do not match the images rendered on this machine")
+    first = r.agent.posts[1][1].split("\n")[0]
+    assert first.startswith(f"I read 10 files (live: SAM 3.1 + Muse Spark + Muse Wonder, fictional pack {PACK}, "), said(r)[:600]
     assert "**$1,596.53 may come off**" in first
     case = r.agent.handoffs[0]
     assert case["replayed"] is False and case["total_cents"] == 159653 and case["apply_by"] == "2026-04-01"
-    assert {"E2", "F1", "B1"} <= {f["code"] for f in case["findings"]}
-    assert case["letters"] == ["application", "dispute", "itemized"] and len(r.agent.cards) == 3
-    assert case["objections"], "the checked answers must cross the gate"
-    gate = Gate.from_profile(E.profile(PACK))
-    assert gate.hits(json.dumps(case)) == []
-    run = json.loads((R.state.STATE / "live_runs.jsonl").read_text())
-    assert run["status"] == "read" and run["calls"] > 0 and run["models"] == ["sam-3.1", "muse-spark-1.3"]
-    # the coordinator's question comes back with the checked answer and its quote, through the same gate
+    assert case["letters"] and case["objections"]
+    assert Gate.from_profile(E.profile(PACK)).hits(json.dumps(case)) == []
     r.request({"v": 1, "type": "ask", "case": case["case"], "objection": "o1"})
-    answer = r.agent.handoffs[-1]
-    assert answer["type"] == "answer" and answer["answer"] and answer["quotes"]
+    assert r.agent.handoffs[-1]["type"] == "answer" and r.agent.handoffs[-1]["quotes"]
+    run = last_run()
+    assert run["models"] == ["sam-3.1", "muse-spark-1.3", "muse-wonder-1.0"]
+    out = live_eval.evaluate(engine_clone / "runs" / "agents" / run["engine_case"], E.PACKS / PACK, run)
+    print(json.dumps(out))
+    assert out["total_off"] == "0.00" and out["replayed"] is False
+    assert {i["cls"] for i in out["items"]} == {"F1", "F2", "E2", "B1", "E3", "E4", "P1"}
+    assert git_status(engine_clone) == ""
 
 
-    # and the evaluation of that finished case: a perfect reading is 7 of 7 through the engine's own scorer
-    out = live_eval.evaluate(tmp_path / "runs" / run["engine_case"], E.PACKS / PACK, run)
-    assert out["replayed"] is False and (out["found"], out["planted"]) == (7, 7) and out["false_findings"] == []
-    assert out["total_off"] == "0.00" and out["usd"] == run["usd"]
-
-
-def test_why_the_second_read_stays_off_it_takes_the_sums_that_rest_on_pdfs(monkeypatch, tmp_path):
-    """Pinned engine, private=False: the check that follows a second read has no rows for PDFs. (Must-differ for the
-    test above. The stand-in OCR here reads nothing, so the photos lose their sums too; a real OCR keeps those.)"""
-    monkeypatch.setenv("BILLRADAR_SECOND_READ", "1")
-    r = build(monkeypatch, tmp_path, "ok")
-    r.papers(ROOM, [{"mxc": m} for m in r.agent.papers])
-    case = r.agent.handoffs[0]
-    assert case["total_cents"] != 159653
-    assert "F1" not in {f["code"] for f in case["findings"] if f["cents"]}
-
-
-def test_real_spend_cap_text_comes_through_the_mcp_layer(monkeypatch, tmp_path):
-    r = build(monkeypatch, tmp_path, "cap")
-    r.papers(ROOM, [{"mxc": m} for m in r.agent.papers])
-    assert "Live reading stopped: the spend cap was reached." in said(r)
+def test_a_replay_is_not_passed_off_as_live(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "replay")
+    posted(r)
+    assert "Live reading stopped: the engine answered from a recording" in said(r), said(r)
     assert "may come off" not in said(r) and r.agent.handoffs == []
 
 
-def test_real_model_failure_comes_through_as_a_stop(monkeypatch, tmp_path):
-    r = build(monkeypatch, tmp_path, "boom")
-    r.papers(ROOM, [{"mxc": m} for m in r.agent.papers])
-    assert "Live reading stopped: the engine reported an error" in said(r)
+def test_a_sheet_outside_the_recordings_without_glimmer_says_so(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "glimmer")
+    posted(r)
+    assert f"Live reading stopped: a sheet {NO_RECORDING}" in said(r), said(r)
+    assert r.agent.handoffs == []
+    assert "NotAvailable" in E.engine_log().read_text()
+    assert last_run()["calls"] <= 1                             # it stopped after the first photo's SAM call
+
+
+def test_spend_cap_from_the_real_exception(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "cap")
+    posted(r)
+    assert "Live reading stopped: the spend cap was reached." in said(r), said(r)
+    assert "may come off" not in said(r) and r.agent.handoffs == []
+
+
+def test_model_failure_comes_through_as_a_stop(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "boom")
+    posted(r)
+    assert "Live reading stopped: the reading failed" in said(r), said(r)
     assert "upstream exploded" not in said(r) and r.agent.handoffs == []
+    assert "upstream exploded" in E.engine_log().read_text()
 
 
-def test_foreign_file_stops_before_the_engine_with_the_real_engine_up(monkeypatch, tmp_path):
-    r = build(monkeypatch, tmp_path, "boom")
+def test_foreign_file_stops_before_any_child(monkeypatch, tmp_path, engine_clone):
+    r = build(monkeypatch, tmp_path, engine_clone, "boom")
     r.agent.papers = {"mxc://bill": b"someone-real-bill", **r.agent.papers}
-    r.papers(ROOM, [{"mxc": m} for m in r.agent.papers])
+    posted(r)
     assert said(r).startswith("I read 11 file(s), but they are not one of") and "Live reading stopped" not in said(r)
-    assert not (tmp_path / "journal.jsonl").exists()
+    assert not E.engine_log().exists()
 
 
-def test_whole_pack_fits_through_stdio_and_the_engine_refuses_it_without_live(monkeypatch, tmp_path):
-    """The unmodified MCP server with LIVE off: 5 MB of papers arrive, and it says live is off (no network path)."""
-    monkeypatch.delenv("LIVE", raising=False)
-    monkeypatch.setattr(E, "ENGINE", ENGINE_ROOT)
-    monkeypatch.setattr(E, "PACKS", ENGINE_ROOT / "eval" / "packs" / "work")
-    assert set(E.engine_env()) == {"PATH", "HOME"}
+def test_the_mcp_server_with_live_on_still_cannot_read_papers(monkeypatch, tmp_path, engine_clone):
+    """The unmodified MCP server: no key and no switch in its environment even with LIVE=1."""
+    monkeypatch.setenv("LIVE", "1")
+    monkeypatch.setenv("MODEL_API_KEY", "not-a-real-key-value")
+    monkeypatch.setattr(E, "ENGINE", engine_clone)
     eng = E.Engine(python=sys.executable)
-    args = E.live_args(PACK, {E.sha256(b): b for b in papers().values()})
-    assert len(json.dumps(args)) > 3_000_000 and len(args["photos"]) == 7 and len(args["files"]) == 3
     with pytest.raises(E.EngineError, match="live model run, which is off here"):
-        eng.call("analyze_case", **args)                       # not "needs an API key": stdio counts as authorized
+        eng.call("analyze_case", fictional=True, photos=["aGVsbG8="], household_size=1, annual_income="1")

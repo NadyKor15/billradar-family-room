@@ -45,19 +45,9 @@ def read_timeout() -> float:
 
 
 def not_ready() -> str | None:
-    """Why a live reading cannot start, before anything is paid for. The engine's own-papers path reads each
-    sheet on this computer with Muse Glimmer after the paid reading; without it the run stops half way."""
-    if not api_key():
-        return f"{KEY_ENV} is not set for the reader."
-    if not glimmer_ready():
-        return ("the engine also needs Muse Glimmer on this computer (llama-server and the weights), and it is "
-                "not set up here.")
-    return None
-
-
-def glimmer_ready() -> bool:
-    from billradar import local_reader  # the engine's own check, with the same environment the engine gets
-    return local_reader.available()
+    """Why a live reading cannot start. Muse Glimmer is needed only when a sheet misses its recording, so the reading
+    itself says so (`live_read`); it stops at the first such sheet, after one SAM call."""
+    return f"{KEY_ENV} is not set for the reader." if not api_key() else None
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────

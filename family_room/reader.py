@@ -5,9 +5,10 @@ the photos through Switch's media route, runs BillRadar (pinned engine, MCP stdi
 numbers in the owner's room, asks the owner by approval card before anything personal moves, and
 posts to the handoff room only messages that pass the strict schema and the PII gate.
 
-By default it replays the engine's recorded result for a recognised fictional pack. With LIVE=1 the
-same recognised files go through the engine's models instead, and files it does not recognise go
-nowhere in either mode. A live failure is said in the room; it never falls back to the recording.
+By default it replays the engine's recorded result for a recognised fictional pack. With LIVE=1 a child
+process (live_read.py) reads the same recognised files with the engine's models and the pack's own profile,
+and files it does not recognise go nowhere in either mode. A live failure is said in the room; it never falls
+back to the recording. The finished case is then read over MCP, as a replayed one is.
 
 Run: python -m family_room.reader   (reads state/reader.json only)
 """
@@ -16,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-import re
 import threading
 import time
 import uuid
@@ -26,7 +26,7 @@ from decimal import Decimal
 from typing import Callable
 
 from family_room import handoff, live, state
-from family_room.engine import (JOURNAL, Engine, EngineError, EngineTimeout, engine_log, live_args, match_pack, profile,
+from family_room.engine import (JOURNAL, Engine, EngineError, LiveReadFailed, engine_log, match_pack, profile, run_live_read,
                                 sha256)
 from family_room.pii import LONG_DIGITS, Gate, PrivacyError
 from family_room.switch import Agent
@@ -39,7 +39,14 @@ BUFFER_MAX = 50         # unaddressed owner files kept per room
 NO_PAPERS = ("I see no papers from you in the last 2 minutes. Post photos or PDFs here as files and "
              "mention @reader within 2 minutes.")
 LIVE_STOPPED = "Live reading stopped: {why} I am not showing a recording instead. Nothing went to the family room."
-SPEND_CAP = re.compile(r"SpendCapReached|would pass (?:the|today's) \$")  # the engine's exception and its wording
+LIVE_STOP_WORDS = {
+    "spend_cap": "the spend cap was reached.",
+    "glimmer": ("a sheet is not in this pack's recorded Muse Glimmer answers, and Muse Glimmer is not set up on this "
+                "computer (llama-server and the weights)."),
+    "refused": "the files could not be matched to the pack's own papers.",
+    "timeout": "no result in time, so the reading was stopped.",
+}
+LIVE_STOP_OTHER = "the reading failed; the reader's log has it."
 TIME_KEYS = ("created_at", "timestamp", "ts", "sent_at", "occurred_at", "origin_server_ts")
 
 
@@ -196,11 +203,8 @@ class Reader:
 
     # ── papers → case ────────────────────────────────────────────────────────
     def papers(self, room: str, files: list[dict]) -> None:
-        blobs = {}
-        for a in files:
-            data = self.agent.media(room, a["mxc"])
-            blobs[sha256(data)] = data
-        pack, why = match_pack(set(blobs), self.packs)
+        hashes = {sha256(self.agent.media(room, a["mxc"])) for a in files}
+        pack, why = match_pack(hashes, self.packs)
         if pack is None:
             tail = ("Live reading takes only those packs, so nothing went to a model." if self.live else
                     "Reading new papers needs a live model, which is off in this demo.")
@@ -208,70 +212,58 @@ class Reader:
                                   f"sample packs ({why}). {tail} Nothing left this room.")
             return
         if self.live:
-            self.read_live(room, pack, blobs)
+            self.read_live(room, pack, hashes)
         else:
             self.present(room, pack, len(files), self.engine.call("analyze_case", fictional=True, sample_pack=pack))
 
-    def read_live(self, room: str, pack: str, blobs: dict[str, bytes]) -> None:
+    def read_live(self, room: str, pack: str, hashes: set[str]) -> None:
         """The posted files of a recognised fictional pack through the engine's models. Runs on the papers
         thread, so the agent keeps handling other events; a second reading while this one runs is refused."""
         if not self.live_slot.acquire(blocking=False):
             self.agent.post(room, "A live reading is already running. Post these again when it has finished. "
                                   "Nothing new went to a model.")
             return
-        keep_slot = False
         try:
-            keep_slot = self._read_live(room, pack, blobs)
+            self._read_live(room, pack, hashes)
         except Exception:  # noqa: BLE001 - said in the room; the agent stays up
             log.exception("live reading failed (pack %s)", pack)
             self.agent.post(room, LIVE_STOPPED.format(why="something failed on the reader's side; the reader's log has it."))
         finally:
-            if not keep_slot:
-                self.live_slot.release()
+            self.live_slot.release()
 
-    def _read_live(self, room: str, pack: str, blobs: dict[str, bytes]) -> bool:
-        """True keeps the live slot taken: after a timeout the engine may still be spending."""
-        n = len(blobs)
+    def _read_live(self, room: str, pack: str, hashes: set[str]) -> None:
+        n = len(hashes)
         why = live.not_ready()
         if why:
             log.error("live reading not started: %s", why)
             self.agent.post(room, LIVE_STOPPED.format(why=why))
-            return False
-        args = live_args(pack, blobs)
+            return
         self.agent.post(room, f"Reading {n} file{'' if n == 1 else 's'} live (fictional pack {pack}). This takes "
                               "minutes. The result will come here.")
         mark, log_mark, began = live.journal_mark(JOURNAL), live.journal_mark(engine_log()), time.monotonic()
-        stopped, a, engine_busy = None, None, False
+        stopped, a = None, {}
         try:
-            a = self.engine.call("analyze_case", _timeout=live.read_timeout(), **args)
-        except EngineTimeout:
-            log.exception("live reading timed out (pack %s)", pack)
-            engine_busy = True
-            stopped = (f"no result after {live.read_timeout():.0f} s, and the engine may still be working. "
-                       "Restart the reader before trying again.")
-        except EngineError as exc:
-            told = live.text_since(engine_log(), log_mark)
-            log.exception("live reading failed in the engine (pack %s). The engine's log says: %s", pack, told[-2000:])
-            stopped = ("the spend cap was reached." if SPEND_CAP.search(f"{exc}\n{told}")
-                       else "the engine reported an error; the reader's log has it.")
+            a = run_live_read(pack, hashes, live.read_timeout())
+        except LiveReadFailed as exc:
+            log.exception("live reading stopped (pack %s). Its log says: %s", pack, live.text_since(engine_log(), log_mark)[-2000:])
+            stopped = LIVE_STOP_WORDS.get(exc.kind, LIVE_STOP_OTHER)
         seconds, stats = time.monotonic() - began, live.journal_since(JOURNAL, mark)
         run = {"pack": pack, "files": n, "seconds": round(seconds, 1), "usd": stats["usd"], "calls": stats["calls"],
-               "models": stats["models"]}
-        if a is not None and a.get("replayed", True):
+               "models": stats["models"], "problems": a.get("problems", [])}
+        if a and a.get("replayed", True):
             log.error("live reading came back replayed (pack %s)", pack)
             stopped = "the engine answered from a recording, not from a model."
         if stopped:
             live.record_run({**run, "status": "stopped"})
             self.agent.post(room, LIVE_STOPPED.format(why=stopped))
-            return engine_busy
+            return
         live.record_run({**run, "status": "read", "engine_case": a["case_id"]})
         try:
             self.present(room, pack, n, a, how=live.how_read(pack, stats, seconds))
-        except Exception:  # noqa: BLE001 - e.g. the PII gate refusing a sentence read off a sheet
+        except Exception:  # noqa: BLE001 - e.g. the strict schema refusing what was read
             log.exception("live case %s could not be presented", a["case_id"])
             self.agent.post(room, "The live reading finished, but the case could not be passed on, so the family room "
                                   "got nothing. The reader's log has it.")
-        return False
 
     def present(self, room: str, pack: str, n_files: int, a: dict, how: str | None = None) -> None:
         """A finished reading, replayed or live: the owner's message, the cards, the de-identified case."""
