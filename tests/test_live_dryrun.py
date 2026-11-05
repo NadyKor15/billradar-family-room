@@ -168,6 +168,20 @@ def test_path_from_child_to_family_message_and_the_submodule_stays_clean(monkeyp
     assert (engine_clone / "runs" / "requests.jsonl").exists()
 
 
+def test_the_sheets_are_kept_beside_the_case_for_the_marks_step_and_the_submodule_stays_clean(monkeypatch, tmp_path, engine_clone):
+    """The real `pipeline.save` runs in the child, in a scratch folder; only sheets/ and sent-sheets/ come over."""
+    r = build(monkeypatch, tmp_path, engine_clone, "stub")
+    posted(r)
+    done = engine_clone / "runs" / "agents" / last_run()["engine_case"]
+    assert sorted(p.name for p in done.iterdir()) == ["case.json", "meta.json", "report.json", "sent-sheets", "sheets"]
+    sheets = sorted(p.name for p in (done / "sheets").iterdir())
+    assert "printed.json" in sheets and any(n.startswith("S") and n.endswith(".jpg") for n in sheets), sheets
+    assert any((done / "sent-sheets").glob("S*.jpg"))
+    assert json.loads((done / "case.json").read_text())["demo"] is True and "\n  " not in (done / "case.json").read_text()
+    assert not list(done.parent.glob(".sheets-*"))
+    assert git_status(engine_clone) == ""
+
+
 def test_control_the_status_check_can_light(engine_clone):
     planted = engine_clone / "tests" / "fixtures" / "recordings" / "planted-by-test.jsonl"
     planted.write_text("{}\n")

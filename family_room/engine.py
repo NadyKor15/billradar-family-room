@@ -27,6 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ENGINE = Path(os.environ.get("BILLRADAR_ENGINE", ROOT / "vendor" / "billradar-meta"))
 PACKS = ENGINE / "eval" / "packs" / "work"
 JOURNAL = ENGINE / "runs" / "requests.jsonl"
+RUNS = ENGINE / "runs" / "agents"          # the finished cases (the engine's git ignores runs/)
+MARKS_TIMEOUT_S = 300.0                    # a few SAM calls on an already read case
 PAPER_SUFFIXES = {".jpg", ".jpeg", ".png", ".pdf"}
 TERM_GRACE_S = 10.0
 # Passed from the reader's environment to a live reading when set.
@@ -85,6 +87,10 @@ def live_read_command() -> list[str]:
     return [sys.executable, "-m", "family_room.live_read"]
 
 
+def live_marks_command() -> list[str]:
+    return [sys.executable, "-m", "family_room.live_marks"]
+
+
 class LiveReadFailed(RuntimeError):
     """kind: spend_cap, glimmer, refused, timeout or failed."""
 
@@ -109,17 +115,15 @@ def stop_group(proc: subprocess.Popen) -> None:
         proc.stdout.close()
 
 
-def run_live_read(pack: str, hashes: set[str], timeout: float, glimmer: bool = True) -> dict[str, Any]:
-    """One live reading in a child process. Blocks the calling thread; raises LiveReadFailed on anything but a result.
-    With glimmer=False it may not start Muse Glimmer (one server, one model): a sheet missing from the kept answers stops it."""
+def run_child(command: list[str], request: dict, env: dict[str, str], timeout: float) -> dict[str, Any]:
+    """One child process of the reader, in the engine's folder and its own process group. Its last stdout line is a JSON
+    object with a "case_id" on success; anything else is a LiveReadFailed with the child's own kind when it gave one."""
     state.STATE.mkdir(parents=True, exist_ok=True)
-    request = json.dumps({"pack": pack, "sha256": sorted(hashes)}).encode()
-    env = live_env() | ({} if glimmer else {"BILLRADAR_GLIMMER_DIR": str(state.STATE / "no-glimmer-for-this-reading")})
     with engine_log().open("ab") as err:
-        proc = subprocess.Popen(live_read_command(), cwd=str(ENGINE), env=env, stdin=subprocess.PIPE,
+        proc = subprocess.Popen(command, cwd=str(ENGINE), env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=err, start_new_session=True)
     try:
-        out, _ = proc.communicate(request, timeout=timeout)
+        out, _ = proc.communicate(json.dumps(request).encode(), timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         stop_group(proc)
         raise LiveReadFailed("timeout", f"no result in {timeout:.0f} s") from exc
@@ -131,6 +135,19 @@ def run_live_read(pack: str, hashes: set[str], timeout: float, glimmer: bool = T
     if proc.returncode != 0 or "case_id" not in result:
         raise LiveReadFailed(result.get("error", "failed"), f"exit {proc.returncode}")
     return result
+
+
+def run_live_read(pack: str, hashes: set[str], timeout: float, glimmer: bool = True) -> dict[str, Any]:
+    """One live reading in a child process. Blocks the calling thread; raises LiveReadFailed on anything but a result.
+    With glimmer=False it may not start Muse Glimmer (one server, one model): a sheet missing from the kept answers stops it."""
+    env = live_env() | ({} if glimmer else {"BILLRADAR_GLIMMER_DIR": str(state.STATE / "no-glimmer-for-this-reading")})
+    return run_child(live_read_command(), {"pack": pack, "sha256": sorted(hashes)}, env, timeout)
+
+
+def run_live_marks(case_id: str, timeout: float = MARKS_TIMEOUT_S) -> dict[str, Any]:
+    """The marks of one finished live case (family_room/live_marks.py): a few SAM 3.1 calls, no Muse Glimmer."""
+    env = live_env() | {"BILLRADAR_GLIMMER_DIR": str(state.STATE / "no-glimmer-for-marks")}
+    return run_child(live_marks_command(), {"case_id": case_id}, env, timeout)
 
 
 class Engine:

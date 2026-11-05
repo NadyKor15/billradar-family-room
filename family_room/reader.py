@@ -26,9 +26,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable
 
-from family_room import handoff, live, state
-from family_room.engine import (JOURNAL, Engine, EngineError, LiveReadFailed, engine_log, match_pack, profile, run_live_read,
-                                sha256)
+from family_room import handoff, live, marks, state
+from family_room.engine import (JOURNAL, RUNS, Engine, EngineError, LiveReadFailed, engine_log, match_pack, profile,
+                                run_live_marks, run_live_read, sha256)
 from family_room.pii import LONG_DIGITS, Gate, PrivacyError
 from family_room.progress import Progress
 from family_room.switch import Agent
@@ -304,6 +304,32 @@ class Reader:
             log.exception("live case %s could not be presented", a["case_id"])
             self.agent.post(room, "The live reading finished, but the case could not be passed on, so the family room "
                                   "got nothing. The reader's log has it.")
+            return
+        self.post_marks(room, pack, a["case_id"])
+
+    def post_marks(self, room: str, pack: str, engine_id: str) -> None:
+        """After the owner's message, the cards and the handoff: the sheet with the doubled sum's line banded, in the owner's
+        room and no other, for the reading that was SHOWN (only its marks are made, so the other reading pays for none).
+        Only marks SAM 3.1 confirmed are posted, one JPEG each, then the approved sentence once. Nothing here goes to the
+        family or handoff rooms, and nothing here can lose what was already sent: every failure is logged and ends it."""
+        try:
+            before = live.journal_mark(JOURNAL)
+            made = run_live_marks(engine_id)
+            pictures = marks.confirmed(marks.case_dir(RUNS, engine_id))
+            sent = 0
+            for name, data in pictures:
+                try:
+                    self.agent.upload(room, name, data, "image/jpeg")
+                    sent += 1
+                except Exception:  # noqa: BLE001 - the next mark may still go
+                    log.exception("mark %s of case %s could not be sent", name, engine_id)
+            if sent:
+                self.agent.post(room, marks.LINE)
+            # not in live_runs.jsonl: live_eval and the tests read its last line as the reading
+            log.info("marks of case %s (pack %s): %s found, %d confirmed by SAM 3.1, %d posted, $%.4f", engine_id, pack,
+                     made.get("marks", 0), len(pictures), sent, live.journal_since(JOURNAL, before)["usd"])
+        except Exception:  # noqa: BLE001 - marks are an extra
+            log.exception("marks for case %s", engine_id)
 
     @staticmethod
     def readings(pack: str, hashes: set[str], wanted: int) -> tuple[list[dict], list[LiveReadFailed]]:
