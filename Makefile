@@ -24,7 +24,8 @@ stack:
 engine:
 	git submodule update --init vendor/billradar-meta
 	@test -x .venv-engine/bin/python || $(PY) -m venv .venv-engine
-	.venv-engine/bin/pip install -q -e vendor/billradar-meta
+	# pypdf 7.0.0 (2026-11-06) removed a call the engine's form filler makes; held below 7 until the engine moves on
+	.venv-engine/bin/pip install -q -e vendor/billradar-meta 'pypdf>=5.1,<7'
 	cd vendor/billradar-meta && ../../.venv-engine/bin/python scripts/fetch_policies.py
 
 seed:

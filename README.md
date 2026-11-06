@@ -296,6 +296,7 @@ In those 8 readings the seventh finding, newborn care filed on the mother's memb
 ## Reproducing: what to know
 
 - Switch is pinned to 0.31.0 (`SWITCH_VERSION` in `deploy/.env`). Other versions are untested.
+- `make up` installs the engine with pypdf below 7: pypdf 7.0.0, released on 2026-11-06, removed a call the engine's form filler makes.
 - The Mattermost image is amd64 only. On Apple Silicon, Docker runs it under emulation, so the first start is slow.
 - `deploy/stand.sh init-env` (run by `make up`) writes `deploy/.env` with fresh secrets, including `CONTROLLER_TOKEN_SECRET`. The file is created with mode 0600 and stays on your machine.
 - `seed.py` links each Mattermost account to a Switch user before the agents start (`POST /gateway/collaborations/{bridge}/identities`). Addressing rules name people by that link, so the link has to exist first.
