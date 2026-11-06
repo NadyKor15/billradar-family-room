@@ -10,7 +10,7 @@ Two agents help the person who handles a family's hospital bills, in chat. Switc
 
 Video: DEMO_VIDEO_LINK
 
-`make judge` needs no keys (see [Run it](#run-it-no-api-keys)). It starts a new stand, plays the whole story, runs the 8 checks and has Switch check the room template, then prints one line:
+`make judge` needs no keys (see [Run it](#run-it-no-api-keys)). It starts a new stand, plays the whole story, runs the 8 checks and posts the room template to Switch's validate route, then prints one line:
 
 ```
 JUDGE PASS: up N s, demo N s, verify 8/8, template valid, total N s
@@ -106,7 +106,7 @@ The same steps one at a time:
 make up              # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
 make demo            # the story above, ≈60 s
 make verify          # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
-make template-check  # Switch checks the room template (see Room template)
+make template-check  # posts the room template to Switch's validate route (see Room template)
 make down            # stop everything (make wipe also drops the data)
 ```
 
@@ -120,13 +120,13 @@ This is the story `make demo` runs, done by hand, in default mode with no keys. 
 
 Open http://localhost:38065 in two windows, one of them private so each keeps its own login. Log in as `nadya` in one and as `alex` in the other, with the passwords from `state/people.json`.
 
-1. As Nadya, in the channel `nadya-papers`, attach the 10 papers from `vendor/billradar-meta/eval/packs/work/brs1-birth-all-errors/` (the `.pdf` and `.jpg` files at the top of that folder) and write `@reader here are the papers from the hospital`. The reader answers there that $1,596.53 may come off, and `family` gets the result. Five cards appear in her room. Tap one, or answer in text with its code and the option's number, such as `A1 1`.
+1. As Nadya, in the channel `nadya-papers`, attach the 10 papers from `vendor/billradar-meta/eval/packs/work/brs1-birth-all-errors/` (the `.pdf` and `.jpg` files at the top of that folder) and write `@reader here are the papers from the hospital`. The reader answers there that $1,596.53 may come off, and `family` gets the result. Five cards appear in her room. Answer a card only when a step says so: tap it, or type its code and the option's number, such as `A2 1`.
 2. Approve the dispute letter. `family` says she approved it.
 3. On "Let Alex talk to billing for you?", answer yes. The call sheet appears in `alex-papers`, and `family` says she said yes.
-4. On "Share one fact with the family room?", share it. `family` gets the income band and no amount.
-5. As Alex, in `family`, write `@coordinator they say the discount is only for uninsured patients`. An answer starting "Say this:" comes back with its source.
+4. On "Share one fact with the family room?", share it. `family` gets the income band and no income amount.
+5. As Alex, in `family`, write `@coordinator they say the discount is only for uninsured patients`. An answer with "Say this:" comes back with its source.
 6. Still as Alex, write `@coordinator can you show me Nadya's papers?`. The coordinator tries the private rooms with its own key and shows Switch's HTTP 403 for each.
-7. Wait for the coordinator's reminder in `family`, 45 seconds after the case arrived. Approving the application letter earlier stops it, and then V8 has nothing to find.
+7. The coordinator's reminder comes in `family` 45 seconds after the case arrived, so it may already be there. Approving the application letter before it comes stops it, and then V8 has nothing to find.
 8. As Nadya, approve the application letter. The filled form and the case report arrive in `nadya-papers`.
 
 Then `make verify` runs the 8 checks on what you did.
@@ -152,7 +152,7 @@ Both are custom agents on the Switch agent protocol (`connection_model: always_o
 | 4 | 2 | Reader hands a de-identified case to the coordinator | agent-to-agent addressed message in an agents-only room | `handoff.py`, `reader.py` | `connect_to_room` + `send_targeted_message` |
 | 5 | 2 | Coordinator posts the result in the family room: the letters wait for Nadya's OK, and a relative is asked about only through her | @-addressing people | `coordinator.py` `case_posted()` | `POST /agents/{id}/message` |
 | 6 | 3 | Letters wait for Nadya's OK as cards in **her** room | approval cards; addressing policy decides who may answer | `reader.py` `card()` | `POST /agent-sessions/{sid}/approvals`, `GET /agent-sessions/approvals/outcomes` |
-| 7 | 3 | "Share one fact with the family room?" (income band, no amount) | approval card as consent | `reader.py` `request()` | same |
+| 7 | 3 | "Share one fact with the family room?" (income band, no income amount) | approval card as consent | `reader.py` `request()` | same |
 | 8 | 3 | "Let Alex talk to billing for you?" → the call sheet appears in Alex's own room | consent card; the reader moves private data only between private rooms | `reader.py` `answered()` | same + `POST /agents/{id}/message` |
 | 9 | 4 | On hold, Alex writes "@coordinator they say the discount is only for uninsured patients" → the hospital's own policy line comes back | round trip coordinator → reader → coordinator in `handoff` | `coordinator.py` `from_person()` | `send_targeted_message` both ways |
 | 10 | after | "Show me Nadya's papers" → the coordinator tries with its own key, Switch says 403 | room membership enforced by the server | `coordinator.py` `try_private()` | `POST /agents/{id}/ops/read_context` |
@@ -189,11 +189,11 @@ To see V3 fail, log in as `alex`, post `1234567` in `family`, and run `make veri
 
 ## Room template
 
-`deploy/family-room.template.yaml` describes the same five rooms and members as `seed.py`, in Switch's template format; `tests/test_template_check.py` fails if the two differ. `make template-check` posts it to `POST /gateway/templates/validate` on the running stand, which stores nothing, and passes only on `ok: true` with 0 errors. It also posts the same document with a break added at the end. If Switch does not refuse that copy, the check fails as blind.
+`deploy/family-room.template.yaml` describes the same five rooms and members as `seed.py`, in Switch's template format; `tests/test_template_check.py` fails if the two differ. `make template-check` posts it to `POST /gateway/templates/validate` on the running stand, which stores nothing, and passes only on `ok: true` with 0 errors. That route checks the YAML and the top-level keys and does not look inside the rooms; the test against `seed.py` is what checks the rooms. It also posts the same document with a break added at the end. If Switch does not refuse that copy, the check fails as blind.
 
 On a stand on 2026-11-06 the template came back with `ok: true`, 0 errors and 0 warnings, and the broken copy with `ok: false` and `invalid_yaml`.
 
-Rooms here are created by `seed.py`. Switch checks the template, and creating the rooms from it has not been tried.
+Rooms here are created by `seed.py`. Creating the rooms from the template has not been tried.
 
 ## What is reused and what is new
 
@@ -237,7 +237,7 @@ make verify
 | `CHOOSER_TIMEOUT_S` | coordinator | seconds for one model call, then word overlap | 15 |
 | `READER_WAIT_S` | `make demo` | how long it waits for the reader's answer | 60, or 3600 with `LIVE=1` |
 
-**What goes to a model.** A live reading starts only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and no reading starts.
+**What goes to a model.** A live reading starts only when the sha256 of every posted file matches a paper of a single fictional pack. Any other file gets the same refusal as without `LIVE=1`, and no reading starts.
 
 - **The reader** starts a child process for each reading (`family_room/live_read.py`) and gives it the pack's name and the sha256 list, never the bytes. The child reads only the pack's own files on that list, checks that the pack says `"fictional": true`, and refuses otherwise, so a file from outside the pack cannot get to a model. It runs the engine's `pipeline.run` with the pack's own profile and date, in the engine's private mode: a blurred copy of each photo goes to SAM 3.1, the closed sheets and PDF pages to Muse Spark, and the findings and letters to Muse Wonder. A new pack without a profile is not read.
 - **Progress lines.** The room would otherwise stay silent for minutes, so the reader posts up to three lines, each once, as the engine's journal shows the stage: "Finding the sheets on your photos with SAM 3.1.", "Private lines are closed on this computer. Muse Spark is reading the closed sheets." and "Muse Wonder is checking the findings against the sheets." (`family_room/progress.py`). The journal holds names, counts and prices of calls, and no content.

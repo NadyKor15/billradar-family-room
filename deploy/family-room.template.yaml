@@ -1,5 +1,5 @@
 # The rooms of BillRadar Family Room as a Switch 0.31.0 template, with the same names and members as
-# family_room/seed.py rooms_spec(). `make template-check` asks Switch to check this document.
+# family_room/seed.py rooms_spec(). `make template-check` posts this document to Switch's validate route.
 # seed.py creates the rooms on a stand; creating them from this document has not been tried.
 version: 1
 group:

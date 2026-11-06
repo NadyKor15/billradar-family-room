@@ -155,6 +155,7 @@ def engine_or_skip():
 
 
 def test_install_runs_the_rules_before_the_original_and_says_so():
+    pytest.importorskip("pypdf")  # reading_fixes needs it; `make test` before `make engine` has none
     calls = []
     checks = NS(plausible_dates=lambda c: calls.append("engine") or c, _name_words=lambda name: HOME)
     said = []

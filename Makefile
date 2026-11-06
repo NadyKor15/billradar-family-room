@@ -2,7 +2,7 @@
 #   make up       Switch + Mattermost (pinned 0.31.0), engine venv, policy sources, seed, both agents
 #   make demo     the family story, played through Mattermost's API, waiting for the agents' answers
 #   make verify   8 checks, each negative next to a control that must succeed
-#   make template-check   Switch checks the room template on the running stand, next to a broken copy that must fail
+#   make template-check   posts the room template to Switch's validate route on the running stand, next to a broken copy that must fail
 #   make judge    up, demo, verify and template-check on a new stand, no keys, ending in one line
 #   make down     stop agents and the stack (make wipe also drops the volumes)
 SHELL := /bin/bash

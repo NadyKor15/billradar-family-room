@@ -1,7 +1,7 @@
-"""`make template-check`: ask the running Switch whether deploy/family-room.template.yaml is a sound template.
+"""`make template-check`: post deploy/family-room.template.yaml to the running Switch's validate route.
 
-It posts the document to `POST /gateway/templates/validate`, which stores nothing, and passes only on ok=true with 0
-errors. Next to it goes a control: the same document with a break at the end, which Switch has to refuse. If it does
+It posts the document to `POST /gateway/templates/validate`, which stores nothing and checks the YAML and the
+top-level keys, not the rooms. It passes only on ok=true with 0 errors. Next to it goes a control: the same document with a break at the end, which Switch has to refuse. If it does
 not, this check cannot see anything, and it fails too.
 
 The template describes the rooms seed.py creates (tests/test_template_check.py keeps the two the same). Rooms here
