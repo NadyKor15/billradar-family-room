@@ -1,5 +1,7 @@
 # BillRadar Family Room
 
+10 of 10 live readings at $1,596.53 · 0 wrong sums, 0 false findings · clean clone: 8/8 checks in 177 s · 403 tests pass
+
 [![clean clone](https://github.com/NadyKor15/billradar-family-room/actions/workflows/clean-clone.yml/badge.svg?branch=main)](https://github.com/NadyKor15/billradar-family-room/actions/workflows/clean-clone.yml)
 
 Built on [Switch](https://github.com/sandbox-quantum/switch).
