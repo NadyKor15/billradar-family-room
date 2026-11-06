@@ -4,6 +4,35 @@
 
 Built on [Switch](https://github.com/sandbox-quantum/switch).
 
+## For judges at a glance
+
+Two agents settle a family's hospital bills in chat, and Switch room membership keeps the one that talks with the family away from the papers.
+
+Video: DEMO_VIDEO_LINK
+
+`make judge` needs no keys (see [Run it](#run-it-no-api-keys)). It starts a new stand, plays the whole story, runs the 8 checks and has Switch check the room template, then prints one line:
+
+```
+JUDGE PASS: up N s, demo N s, verify 8/8, template valid, total N s
+```
+
+On GitHub's clean clone that took JUDGE_SECONDS.
+
+What comes from Switch: room membership enforced with a 403, approval cards only the room's owner can answer, addressing rules that name people, and the same two agents on Mattermost and on Telegram.
+
+On 10 live readings of the fictional sample pack, the total was $1,596.53 in 10 of 10, with 0 wrong sums or deadlines and 0 false findings ([measured](#live-mode)). The run filmed for the video, case `a9b854ba046a9`, read the pack twice at once: both readings came to $1,596.53 with 6 findings, in 403 seconds, for $0.85.
+
+![The story in a short loop](docs/img/flow.gif)
+
+| | |
+|---|---|
+| ![An approval card in Nadya's own room](docs/img/card.png) | ![The coordinator's answer with two HTTP 403 lines](docs/img/http-403.png) |
+| A card in Nadya's room. Only she can answer it. | Asked for Nadya's papers, the coordinator tries both private rooms with its own key. Switch answers 403 twice. |
+| ![The handoff room's participants in Switch Gateway](docs/img/gateway-handoff.png) | ![The output of make verify](docs/img/make-verify.png) |
+| The `handoff` room in Switch Gateway: three agents and no people. `auditor` is used only by `make verify`. | `make verify` on a clean clone, from [this GitHub run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42136970945). |
+
+## What it is
+
 For the person who handles a family's hospital bills, and the relatives who sometimes help. That person keeps track of everyone's bills, insurance plans, deadlines and calls to the hospital. When relatives help, letters and photos of bills start going around in chats, and those hold names, account numbers and diagnoses.
 
 Here one agent reads the private papers in that person's own room, and a second agent runs the shared family room. **Switch room membership is what keeps the second agent away from the papers**: when it asks for them, Switch answers 403.
@@ -16,25 +45,91 @@ It runs in two modes. By default neither agent calls a language model: the coord
 
 1. Nadya handles her family's hospital bills. She sends 10 files of hospital papers to her own room. The reader reports 7 findings: $1,596.53 may come off.
 2. The reader passes the case to the coordinator without names or account numbers. The family room gets only the result.
-3. In her own room, Nadya answers cards that only she can answer: the letters, one fact to share, and whether a relative may call the hospital.
+3. In her own room, Nadya answers cards that only she can answer: the letters, one fact to share, and whether a relative may call the hospital. After her yes on the application letter, the hospital's form filled in from the case and the case report come to her room as PDFs. She signs and sends the form herself.
 4. On hold with billing, the relative (Alex in the demo) reports what billing says, and the hospital's own policy line comes back.
 
 After that the coordinator posts its own deadline reminder, and `make verify` checks that nothing private reached the family room.
+
+```mermaid
+sequenceDiagram
+    actor N as Nadya
+    participant R as reader
+    participant H as handoff room
+    participant C as coordinator
+    participant F as family room
+    actor A as relative (Alex)
+    N->>R: 10 files and @reader, in her own room
+    R-->>N: findings, draft letters and their cards, in her room
+    R->>H: the case in BRv1, with no names or account numbers
+    H->>C: the case
+    C->>F: the result, and the letters wait for Nadya's OK
+    C->>H: may Alex call? may one fact be shared?
+    H->>R: both questions
+    R-->>N: two more cards, in her room
+    N->>R: yes on the cards
+    R-->>A: the call sheet, in Alex's own room
+    R->>H: the answers to the cards
+    H->>C: the answers to the cards
+    C->>F: Nadya said yes, and the one fact
+    A->>F: @coordinator they say the discount is only for uninsured patients
+    F->>C: the message
+    C->>H: which checked answer is needed
+    H->>R: the question
+    R->>H: the prepared answer and the policy quote
+    H->>C: the answer
+    C->>F: Say this, with its source
+    A->>F: @coordinator can you show me Nadya's papers?
+    F->>C: the message
+    Note over C: asks Switch for each private room with its own key
+    C->>F: Switch's two HTTP 403 answers
+    C->>F: its own reminder of the application deadline
+    N->>R: yes on the application letter
+    R-->>N: the filled form and the case report, in her room
+```
+
+All of these messages go through Switch.
 
 ## Run it (no API keys)
 
 ```
 git clone --recurse-submodules https://github.com/NadyKor15/billradar-family-room && cd billradar-family-room
-make up       # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
-make demo     # the story above, ≈60 s
-make verify   # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
-make test     # 351 tests, no stand needed; the ones that use the engine skip until `make engine` has run
-make down     # stop everything (make wipe also drops the data)
+make judge    # make up, make demo, make verify and make template-check, ending in one line
+make test     # TEST_COUNT tests, no stand needed; the ones that use the engine skip until `make engine` has run
+make wipe     # stop everything and drop the data
 ```
 
-GitHub runs these same commands on a clean clone at every push to main (`.github/workflows/clean-clone.yml`), with no keys.
+`make judge` takes out any live settings and keys it finds in the environment before each step. It stops at the first failure, with the step's name and the end of its output, and leaves the stand up so you can look at it. It clears nothing: if a stand is already there, it says `make wipe first`.
 
-Needs Docker with Compose, Python 3.12, make, git, curl, openssl and network access: `make up` pulls the images and downloads 14 public policy documents, and it stops if a download fails. The Mattermost image is amd64 only, so Apple Silicon runs it under emulation. Everything binds to 127.0.0.1 (ports: 38000 Switch API, 38030 Switch Gateway, 38065 Mattermost, 38432 Postgres). `make demo` plays Nadya and Alex through Mattermost's API. Open http://localhost:38065 to watch or to do the steps yourself; demo passwords are in `state/people.json`. The Gateway login is in `deploy/.env`.
+The same steps one at a time:
+
+```
+make up              # Switch 0.31.0 + Mattermost, the BillRadar engine (pinned), public policy sources, seed, both agents
+make demo            # the story above, ≈60 s
+make verify          # 8 checks, ends with "8/8 PASS"; each refusal check has a control that has to succeed
+make template-check  # Switch checks the room template (see Room template)
+make down            # stop everything (make wipe also drops the data)
+```
+
+GitHub runs `make judge` and `make test` on a clean clone at every push to main (`.github/workflows/clean-clone.yml`), with no keys.
+
+Needs Docker with Compose, Python 3.12, make, git, curl, openssl and network access: `make up` pulls the images and downloads 14 public policy documents, and it stops if a download fails. The Mattermost image is amd64 only, so Apple Silicon runs it under emulation. Everything binds to 127.0.0.1 (ports: 38000 Switch API, 38030 Switch Gateway, 38065 Mattermost, 38432 Postgres). `make demo` plays Nadya and Alex through Mattermost's API. Open http://localhost:38065 to watch; demo passwords are in `state/people.json`. The Gateway login is in `deploy/.env`.
+
+## Try it yourself as Nadya and Alex
+
+This is the story `make demo` runs, done by hand, in default mode with no keys. Run `make up` and not `make demo`; if the demo has already run, `make wipe && make up` gives a clean stand.
+
+Open http://localhost:38065 in two windows, one of them private so each keeps its own login. Log in as `nadya` in one and as `alex` in the other, with the passwords from `state/people.json`.
+
+1. As Nadya, in the channel `nadya-papers`, attach the 10 papers from `vendor/billradar-meta/eval/packs/work/brs1-birth-all-errors/` (the `.pdf` and `.jpg` files at the top of that folder) and write `@reader here are the papers from the hospital`. The reader answers there that $1,596.53 may come off, and `family` gets the result. Five cards appear in her room. Tap one, or answer in text with its code and the option's number, such as `A1 1`.
+2. Approve the dispute letter. `family` says she approved it.
+3. On "Let Alex talk to billing for you?", answer yes. The call sheet appears in `alex-papers`, and `family` says she said yes.
+4. On "Share one fact with the family room?", share it. `family` gets the income band and no amount.
+5. As Alex, in `family`, write `@coordinator they say the discount is only for uninsured patients`. An answer starting "Say this:" comes back with its source.
+6. Still as Alex, write `@coordinator can you show me Nadya's papers?`. The coordinator tries the private rooms with its own key and shows Switch's HTTP 403 for each.
+7. Wait for the coordinator's reminder in `family`, 45 seconds after the case arrived. Approving the application letter earlier stops it, and then V8 has nothing to find.
+8. As Nadya, approve the application letter. The filled form and the case report arrive in `nadya-papers`.
+
+Then `make verify` runs the 8 checks on what you did.
 
 ## Two agents, different jobs
 
@@ -52,15 +147,17 @@ Both are custom agents on the Switch agent protocol (`connection_model: always_o
 | # | Story step | What the family sees | Switch primitive | File | Call |
 |---|---|---|---|---|---|
 | 1 | 1 | Nadya posts 10 photos and PDFs with "@reader" in her own room | attachments on an addressed message; media route | `reader.py` `papers()` | SSE `message.attachments[]` → `GET /agents/{id}/rooms/{room}/media?mxc=…` |
-| 2 | 1 | Reader answers in her room: 7 findings, $1,596.53 may come off | agent message | `reader.py` | `POST /agents/{id}/message` |
-| 3 | 2 | Reader hands a de-identified case to the coordinator | agent-to-agent addressed message in an agents-only room | `handoff.py`, `reader.py` | `connect_to_room` + `send_targeted_message` |
-| 4 | 2 | Coordinator posts the result in the family room: the letters wait for Nadya's OK, and a relative is asked about only through her | @-addressing people | `coordinator.py` `case_posted()` | `POST /agents/{id}/message` |
-| 5 | 3 | Letters wait for Nadya's OK as cards in **her** room | approval cards; addressing policy decides who may answer | `reader.py` `card()` | `POST /agent-sessions/{sid}/approvals`, `GET /agent-sessions/approvals/outcomes` |
-| 6 | 3 | "Share one fact with the family room?" (income band, no amount) | approval card as consent | `reader.py` `request()` | same |
-| 7 | 3 | "Let Alex talk to billing for you?" → the call sheet appears in Alex's own room | consent card; the reader moves private data only between private rooms | `reader.py` `answered()` | same + `POST /agents/{id}/message` |
-| 8 | 4 | On hold, Alex writes "@coordinator they say the discount is only for uninsured patients" → the hospital's own policy line comes back | round trip coordinator → reader → coordinator in `handoff` | `coordinator.py` `from_person()` | `send_targeted_message` both ways |
-| 9 | after | "Show me Nadya's papers" → the coordinator tries with its own key, Switch says 403 | room membership enforced by the server | `coordinator.py` `try_private()` | `POST /agents/{id}/ops/read_context` |
-| 10 | after | "⏰ Reminder: the financial assistance application is due 2026-04-01 and isn't approved yet" | Switch has no scheduler, so the coordinator keeps its own clock | `coordinator.py` `remind()` | `POST /agents/{id}/message` |
+| 2 | 1 | With `LIVE=1`, up to three lines say which model is at work: SAM 3.1, Muse Spark, Muse Wonder | agent message | `progress.py` | `POST /agents/{id}/message` |
+| 3 | 1 | Reader answers in her room: 7 findings, $1,596.53 may come off | agent message | `reader.py` | `POST /agents/{id}/message` |
+| 4 | 2 | Reader hands a de-identified case to the coordinator | agent-to-agent addressed message in an agents-only room | `handoff.py`, `reader.py` | `connect_to_room` + `send_targeted_message` |
+| 5 | 2 | Coordinator posts the result in the family room: the letters wait for Nadya's OK, and a relative is asked about only through her | @-addressing people | `coordinator.py` `case_posted()` | `POST /agents/{id}/message` |
+| 6 | 3 | Letters wait for Nadya's OK as cards in **her** room | approval cards; addressing policy decides who may answer | `reader.py` `card()` | `POST /agent-sessions/{sid}/approvals`, `GET /agent-sessions/approvals/outcomes` |
+| 7 | 3 | "Share one fact with the family room?" (income band, no amount) | approval card as consent | `reader.py` `request()` | same |
+| 8 | 3 | "Let Alex talk to billing for you?" → the call sheet appears in Alex's own room | consent card; the reader moves private data only between private rooms | `reader.py` `answered()` | same + `POST /agents/{id}/message` |
+| 9 | 4 | On hold, Alex writes "@coordinator they say the discount is only for uninsured patients" → the hospital's own policy line comes back | round trip coordinator → reader → coordinator in `handoff` | `coordinator.py` `from_person()` | `send_targeted_message` both ways |
+| 10 | after | "Show me Nadya's papers" → the coordinator tries with its own key, Switch says 403 | room membership enforced by the server | `coordinator.py` `try_private()` | `POST /agents/{id}/ops/read_context` |
+| 11 | after | "⏰ Reminder: the financial assistance application is due 2026-04-01 and isn't approved yet" | Switch has no scheduler, so the coordinator keeps its own clock | `coordinator.py` `remind()` | `POST /agents/{id}/message` |
+| 12 | 3 | After her yes on the application letter, the filled form and the case report arrive as PDFs in **her** room and no other. The sample's form carries the stamp "SAMPLE - FICTIONAL DATA". BillRadar sends nothing: she signs the form and sends it herself | a file sent by an agent to a room | `reader.py` `send_application_files()` | `POST /agents/{id}/rooms/{room}/media` |
 
 Telegram sends an album as separate messages: the reader takes the owner's files posted in the room in the 2 minutes before the @reader message; if nothing is left in that window, it asks for them again. The reader says "I read N files" (in the sample pack, 7 photos show 14 sheets and 3 files are PDFs, so findings cite "sheet 13" or "file 3").
 
@@ -89,6 +186,14 @@ Seeding (`seed.py`) uses the Gateway: `POST /gateway/users`, `POST /gateway/coll
 To see V3 fail, log in as `alex`, post `1234567` in `family`, and run `make verify` again: any run of 7 or more digits counts as account-like. `make wipe && make up` gives a clean stand.
 
 `make verify` uses a third agent, `auditor`. It is a member of `family`, `handoff` and its own `canary-control` room, nobody can address it, and it scans the shared rooms with `read_context`. It posts only the planted canary, and only in `canary-control`.
+
+## Room template
+
+`deploy/family-room.template.yaml` describes the same five rooms and members as `seed.py`, in Switch's template format; `tests/test_template_check.py` fails if the two differ. `make template-check` posts it to `POST /gateway/templates/validate` on the running stand, which stores nothing, and passes only on `ok: true` with 0 errors. It also posts the same document with a break added at the end. If Switch does not refuse that copy, the check fails as blind.
+
+On a stand on 2026-11-06 the template came back with `ok: true`, 0 errors and 0 warnings, and the broken copy with `ok: false` and `invalid_yaml`.
+
+Rooms here are created by `seed.py`. Switch checks the template, and creating the rooms from it has not been tried.
 
 ## What is reused and what is new
 
@@ -135,6 +240,7 @@ make verify
 **What goes to a model.** A live reading starts only when the sha256 of every posted file matches a paper of one fictional pack. Any other file gets the same refusal as without `LIVE=1`, and no reading starts.
 
 - **The reader** starts a child process for each reading (`family_room/live_read.py`) and gives it the pack's name and the sha256 list, never the bytes. The child reads only the pack's own files on that list, checks that the pack says `"fictional": true`, and refuses otherwise, so a file from outside the pack cannot get to a model. It runs the engine's `pipeline.run` with the pack's own profile and date, in the engine's private mode: a blurred copy of each photo goes to SAM 3.1, the closed sheets and PDF pages to Muse Spark, and the findings and letters to Muse Wonder. A new pack without a profile is not read.
+- **Progress lines.** The room would otherwise stay silent for minutes, so the reader posts up to three lines, each once, as the engine's journal shows the stage: "Finding the sheets on your photos with SAM 3.1.", "Private lines are closed on this computer. Muse Spark is reading the closed sheets." and "Muse Wonder is checking the findings against the sheets." (`family_room/progress.py`). The journal holds names, counts and prices of calls, and no content.
 - **The closing step** reads each sheet on this computer with Muse Glimmer. On this pack it first looks for a recorded answer to the same picture. The recordings match byte for byte only where the pictures come out exactly the same: on the Mac that made them all of them matched, and on another Mac with the same package versions they did not. A sheet with no recording needs Muse Glimmer itself: llama-server, the weights and about 32 GB of free memory. Without those the reading stops at the first such sheet and says so. What Glimmer answers is kept in `~/.cache/billradar-family-room/`, so on a new computer the first reading is the slow one, and after that only a picture it has not seen goes to Glimmer. SAM 3.1, Muse Spark and Muse Wonder are called on every reading.
 - **Reading rules.** `family_room/reading_fixes.py` applies four fixed rules to a model's reading, after the reading and before the engine's checks, in live mode only. A PDF bill whose provider was read as a person ("LAST, FIRST") is the hospital's bill when its first printed lines name the hospital and no practice. On a summary statement, a line that says "total" and repeats the sheet's total charges to the cent is not a service; when such a sheet has no lines left and its balance and total charges were read, two reads differing only between no lines and at most 2 raise no doubt about its money. A line with no date on a sheet that covers one day takes that day. On an itemized bill, when one of two identical lines holds the sheet's whole balance as its patient share and no other line has a share, that amount is the balance. No rule writes a sum, but a rule can move the total, up or down, by changing what the checks count. The checks still work out every sum, and the engine's verifier, which sees the corrected reading, has the last word. A rule that fires leaves a line in the reading's `problems`. The engine's own files stay unchanged at the pinned commit, so these rules live in this repository.
 - **The marked sheet** comes after the owner has the message, the cards and the handoff has gone, and only for the reading that is shown: a short separate child (`family_room/live_marks.py`) calls the engine's own `highlight.attach` on that finished case, one SAM 3.1 call per mark on the covered sheet, through the same spend ceiling. The reading that is not shown pays for no mark. A mark exists only for a finding with a sum printed on a photographed sheet; PDF pages and findings without a sum on a sheet (in the sample pack, the $1,399.71 financial assistance finding) get none. Where the device cannot find the row, there is no mark and nothing is said about it. Each mark SAM 3.1 confirmed is posted as one JPEG in the owner's own room, then one line: "BillRadar marks the exact line on the photo: code finds the row on this device and SAM 3.1 confirms it on the covered sheet." A mark only the row finder stands behind is not posted. The picture holds the sheet as photographed, so it goes nowhere else, and the handoff message is unchanged. A failure here is logged and loses nothing that was already sent.
@@ -180,9 +286,11 @@ The same agents also run in Telegram, through the same Switch, with no public ad
 3. Make groups with the bot: one for the person handling the bills, one for the family, and, if you want the call sheet on the relative's phone, one for the relative. Each person needs a Telegram username and writes one message in each of their groups, so Switch sees the rooms and the people.
 4. `python3.12 -m family_room.telegram status` lists room ids and Telegram user ids. Then `python3.12 -m family_room.telegram wire PAPERS_ROOM FAMILY_ROOM OWNER_ID HELPER_ID [HELPER_ROOM]`. `python3.12 -m family_room.telegram probe` asks Switch about each private group as each agent: the coordinator must get 403 and the reader 200. `unwire` puts the agents back on Mattermost.
 
+The coordinator's 403 and the reader's 200 on both private Telegram rooms were checked live on 2026-11-06.
+
 What is different in Telegram:
 
-- An album arrives as separate messages, and only one of them carries the caption. The reader counts everything the same person sent in the 2 minutes before the "@reader" message as one batch, so a file sent in that window by mistake would join it.
+- An album arrives as separate messages, and only one of them carries the caption. The reader counts everything the same person sent in the 2 minutes before the "@reader" message as one batch, so a file sent in that window by mistake would join it. A first file older than 2 minutes is left out, so write the "@reader" phrase as the caption of the last file.
 - Telegram recompresses images picked from the gallery, and the reader then cannot recognise the sample pack. Send them as files.
 - Cards appear as inline buttons in the owner's group.
 - The files to send are in `vendor/billradar-meta/eval/packs/work/brs1-birth-all-errors/`.
@@ -198,6 +306,9 @@ What is different in Telegram:
 - Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. The room boundary covers other people and agents and does not cover whoever runs the server.
 - Both agents run as one OS user, and each reads its own key from `state/` by convention. A real deployment would run them under separate users.
 - Cases and the reminder timer live in memory: restarting an agent forgets them. In the demo the reminder fires 45 seconds after the case arrives (`REMINDER_AFTER_S`); it does not count down to the date.
+- In the log of Switch's Telegram bridge, "Timed out" can appear for a message that did arrive.
+- After such a timeout, a card's button in Telegram may not work and may answer that the "control does not belong to this card".
+- The room can also get "couldn't be relayed" for a file that was delivered.
 
 ## License
 
