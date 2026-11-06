@@ -94,7 +94,7 @@ All of these messages go through Switch.
 ```
 git clone --recurse-submodules https://github.com/NadyKor15/billradar-family-room && cd billradar-family-room
 make judge    # make up, make demo, make verify and make template-check, ending in one line
-make test     # TEST_COUNT tests, no stand needed; the ones that use the engine skip until `make engine` has run
+make test     # 404 tests, no stand needed; the ones that use the engine skip until `make engine` has run
 make wipe     # stop everything and drop the data
 ```
 
