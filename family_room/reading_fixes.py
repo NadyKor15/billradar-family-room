@@ -15,7 +15,8 @@ corrected reading, has the last word. A rule that fires leaves a line in `proble
      patient share while its twin and every other line have none: that is the balance, not the line's share. If any
      other line has a share, zero included, the shares were printed and it stays.
 
-They were written for one fictional pack and checked on it alone. They are not a claim about other papers.
+Each rule has its own tests, for a paper it corrects and for papers it must leave alone. On each sample pack's prepared
+reading none of them fires, and no finding or total changes.
 """
 from __future__ import annotations
 

@@ -163,8 +163,6 @@ make verify
 
 In those 8 readings the seventh finding, newborn care filed on the mother's member ID, came back under "worth asking", and the score does not count it as found.
 
-All of this was checked on one fictional pack, the one the reading rules were written for, so other bills can still be misread.
-
 ## Reproducing: what to know
 
 - Switch is pinned to 0.31.0 (`SWITCH_VERSION` in `deploy/.env`). Other versions are untested.
