@@ -18,7 +18,7 @@ Video: DEMO_VIDEO_LINK
 JUDGE PASS: up N s, demo N s, verify 8/8, template valid, total N s
 ```
 
-On GitHub's clean clone that took 173 seconds: `JUDGE PASS: up 103 s, demo 61 s, verify 8/8, template valid, total 173 s` ([run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42153162834)).
+On GitHub's clean clone that took 177 seconds: `JUDGE PASS: up 109 s, demo 60 s, verify 8/8, template valid, total 177 s` ([run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42232516214)).
 
 What comes from Switch: room membership enforced with a 403, approval cards only the room's owner can answer, addressing rules that name people, and the same two agents on Mattermost and on Telegram.
 
