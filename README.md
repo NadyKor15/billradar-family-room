@@ -10,7 +10,7 @@ Flip the Switch, track 02: Best Personal or Creative Workflow.
 
 Two agents help the person who handles a family's hospital bills, in chat. Switch room membership keeps the agent that talks with the family away from the papers.
 
-Video: DEMO_VIDEO_LINK
+Video: https://youtu.be/O1DNY7aAeMs
 
 `make judge` needs no keys (see [Run it](#run-it-no-api-keys)). It starts a new stand, plays the whole story, runs the 8 checks and posts the room template to Switch's validate route, then prints one line:
 
