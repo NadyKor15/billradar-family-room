@@ -4,6 +4,8 @@
 
 Built on [Switch](https://github.com/sandbox-quantum/switch).
 
+Flip the Switch, track 02: Best Personal or Creative Workflow.
+
 ## For judges at a glance
 
 Two agents help the person who handles a family's hospital bills, in chat. Switch room membership keeps the agent that talks with the family away from the papers.
@@ -39,6 +41,15 @@ The `handoff` room in Switch Gateway: three agents and no people. `auditor` is u
 ![The output of make verify](docs/img/make-verify.png)
 
 `make verify` on a clean clone, from [this GitHub run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42136970945).
+
+### How it meets the judging criteria
+
+| Criterion | Where to see it |
+|---|---|
+| Use of Switch (30%) | Privacy rests on Switch itself: room membership (the coordinator gets 403 on private rooms), approval cards only the room's owner can answer (the server operator's press is refused), the agents-only handoff room, the media route, and the same two agents on Mattermost and on Telegram. Without Switch each of these would have to be built for every messenger. [What keeps private things private](#what-keeps-private-things-private) |
+| Technical execution (25%) | `make judge` on a clean clone with no keys: the stand, the story, 8 checks with controls and one PASS line. GitHub runs it on every push (badge above). 403 tests pass, 1 is skipped until the engine is built. In live mode Meta's models read the fictional pack: 10 of 10 readings found $1,596.53. [Run it](#run-it-no-api-keys) · [Live mode](#live-mode) |
+| Creativity and impact (25%) | In most families one person handles everyone's hospital bills: their own, the kids', the parents', each with its own insurance and deadlines. BillRadar Family Room takes most of that work off them: it reads the bills, finds errors of different kinds, such as double charges, and the financial assistance the hospital's own policy allows, and prepares the letters and the filled-in form. Relatives help with the calls without seeing a single document. The video shows a live Telegram chat between two family members. [What it is](#what-it-is) · [The story in four steps](#the-story-in-four-steps) |
+| Presentation (20%) | The video, the short loop and the snapshots above, a table of the steps with the Switch feature and API call for each one, and "Try it yourself as Nadya and Alex". [The workflow, step by step](#the-workflow-step-by-step) · [Try it yourself](#try-it-yourself-as-nadya-and-alex) |
 
 ## What it is
 
@@ -214,6 +225,10 @@ Rooms here are created by `seed.py`. Creating the rooms from the template has no
 
 Without keys the engine runs only its fictional sample packs and says so (REPLAYED); the reader recognises a pack by the sha256 of the posted files, and part of a pack is enough: the whole pack is replayed. With `LIVE=1` the same rule decides what may go to a model, and only the files that were posted are read. The sample hospital, Seaside Regional, is fictional; its policy text is the public Financial Assistance Policy of Memorial Healthcare System (`memorial-2026-05`). The sample's "today" is 2026-03-02, which is why the deadline reads 2026-04-01.
 
+## AI tools used to build it
+
+The code was written with Claude Code as a coding assistant. Every change is checked by the tests and by `make judge` on a clean clone on GitHub. At runtime the project calls only Meta's models, and only in live mode.
+
 ## Live mode
 
 There are two modes. By default the reader replays the engine's recorded result for a recognised fictional pack, and neither agent calls a model. With `LIVE=1` and a Meta Model API key, the reader reads that pack with the engine's models: SAM 3.1 finds the sheets, Muse Spark reads them, Muse Wonder reviews the result. The coordinator asks Muse Spark which checked answer fits.
@@ -307,17 +322,25 @@ What is different in Telegram:
 - `handoff` and `make verify` stay on the Mattermost rooms. The coordinator's 403 probe asks about each person's Telegram group if they have one, and otherwise about their Mattermost room.
 - With `HELPER_ROOM` the call sheet goes to the relative's Telegram group. Without it, it goes to their Mattermost room `alex-papers`.
 
+## What we learned about Switch
+
+What we ran into on Switch 0.31.0, how we worked around it, and what would help.
+
+| What we saw | What we did | What would help |
+|---|---|---|
+| A refused card answer shows up only in Switch's log; the person who pressed sees nothing. | Nothing we can do from an agent. | A reply to the person whose press was refused. |
+| In Mattermost, Switch adds "Nobody here is linked to this agent's owner…" to each card, because the agents' owner is the service record Agent Bootstrap. Telegram cards don't carry it. | The reader names the room's owner in its own text. | A way to hide the line when the addressing rule already names the person. |
+| Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. | `make verify` V1 lists them separately, and V6 checks that the operator's press on a card in Nadya's room is refused. | Private rooms without the operator. |
+| A Telegram album arrives as separate messages, and only one of them carries the caption. | The reader takes the same person's files from the 2 minutes before the "@reader" message. | Albums delivered as one event. |
+| Telegram's bridge can log "Timed out" or "couldn't be relayed" for a message or file that did arrive, and after such a timeout a card's button may answer that the "control does not belong to this card". | Listed here. | A delivery status that tells a delay from a failure. |
+| There is no scheduler. | The coordinator keeps its own timer for reminders. | A scheduler for reminders. |
+| The bundled Mattermost image is amd64 only, so it runs slowly on Apple Silicon. | We ran the stand on it anyway. | An arm64 image. |
+
 ## Known limits
 
-- A refused card answer is visible in Switch's log, not to the person who pressed the button.
-- In Mattermost, Switch's card adds "Nobody here is linked to this agent's owner…": the agents' owner is the service record Agent Bootstrap, which no account is linked to. The reader mentions the room's owner itself. Telegram cards do not carry this line.
 - Only BillRadar's fictional packs are ever read, in both modes. Reading a family's own papers is not built here.
-- Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. The room boundary covers other people and agents and does not cover whoever runs the server.
 - Both agents run as one OS user, and each reads its own key from `state/` by convention. A real deployment would run them under separate users.
 - Cases and the reminder timer live in memory: restarting an agent forgets them. In the demo the reminder fires 45 seconds after the case arrives (`REMINDER_AFTER_S`); it does not count down to the date.
-- In the log of Switch's Telegram bridge, "Timed out" can appear for a message that did arrive.
-- After such a timeout, a card's button in Telegram may not work and may answer that the "control does not belong to this card".
-- The room can also get "couldn't be relayed" for a file that was delivered.
 
 ## License
 
