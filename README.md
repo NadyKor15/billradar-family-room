@@ -6,7 +6,7 @@ Built on [Switch](https://github.com/sandbox-quantum/switch).
 
 ## For judges at a glance
 
-Two agents settle a family's hospital bills in chat, and Switch room membership keeps the one that talks with the family away from the papers.
+Two agents help the person who handles a family's hospital bills, in chat. Switch room membership keeps the agent that talks with the family away from the papers.
 
 Video: DEMO_VIDEO_LINK
 
@@ -20,7 +20,7 @@ On GitHub's clean clone that took JUDGE_SECONDS.
 
 What comes from Switch: room membership enforced with a 403, approval cards only the room's owner can answer, addressing rules that name people, and the same two agents on Mattermost and on Telegram.
 
-On 10 live readings of the fictional sample pack, the total was $1,596.53 in 10 of 10, with 0 wrong sums or deadlines and 0 false findings ([measured](#live-mode)). The run filmed for the video, case `a9b854ba046a9`, read the pack twice at once: both readings came to $1,596.53 with 6 findings, in 403 seconds, for $0.85.
+On 10 live readings of the fictional sample pack, the total was $1,596.53 in 10 of 10, with 0 wrong sums or deadlines and 0 false findings ([measured](#live-mode)). The run filmed for the video read the pack twice at once in 403 seconds, for $0.85, and both readings came to $1,596.53. The reading shown lists 6 findings and 2 items worth asking; scored against the pack's key, that is all 7 planted errors.
 
 ![The story in a short loop](docs/img/flow.gif)
 
