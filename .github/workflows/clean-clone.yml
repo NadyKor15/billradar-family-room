@@ -1,4 +1,4 @@
-# A clean clone on a machine that is not ours runs the same commands the README gives: no keys, no model.
+# A clean clone on a machine that is not ours runs the same command the README gives: no keys, no model.
 name: clean clone
 
 on:
@@ -23,14 +23,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: make up
-        run: make up
-
-      - name: make demo
-        run: make demo
-
-      - name: make verify
-        run: make verify
+      - name: make judge
+        run: make judge
 
       - name: make test
         run: make test
