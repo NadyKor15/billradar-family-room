@@ -24,12 +24,21 @@ On 10 live readings of the fictional sample pack, the total was $1,596.53 in 10 
 
 ![The story in a short loop](docs/img/flow.gif)
 
-| | |
-|---|---|
-| ![An approval card in Nadya's own room](docs/img/card.png) | ![The coordinator's answer with two HTTP 403 lines](docs/img/http-403.png) |
-| A card in Nadya's room. Only she can answer it. | Asked for Nadya's papers, the coordinator tries both private rooms with its own key. Switch answers 403 twice. |
-| ![The handoff room's participants in Switch Gateway](docs/img/gateway-handoff.png) | ![The output of make verify](docs/img/make-verify.png) |
-| The `handoff` room in Switch Gateway: three agents and no people. `auditor` is used only by `make verify`. | `make verify` on a clean clone, from [this GitHub run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42136970945). |
+<img src="docs/img/card.png" alt="An approval card in Nadya's own room" width="480">
+
+A card in Nadya's room. Only she can answer it.
+
+<img src="docs/img/http-403.png" alt="The coordinator's answer with two HTTP 403 lines" width="480">
+
+Asked for Nadya's papers, the coordinator tries both private rooms with its own key. Switch answers 403 twice.
+
+![The handoff room's participants in Switch Gateway](docs/img/gateway-handoff.png)
+
+The `handoff` room in Switch Gateway: three agents and no people. `auditor` is used only by `make verify`.
+
+![The output of make verify](docs/img/make-verify.png)
+
+`make verify` on a clean clone, from [this GitHub run](https://github.com/NadyKor15/billradar-family-room/actions/runs/42136970945).
 
 ## What it is
 
