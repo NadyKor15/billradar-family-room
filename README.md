@@ -166,7 +166,7 @@ Seeding (`seed.py`) uses the Gateway: `POST /gateway/users`, `POST /gateway/coll
 ## What keeps private things private
 
 - **Membership (Switch).** The coordinator is not a member of any private room, so `read_context`, the media route and posting there all return 403 (`make verify` V5, with controls that return 200).
-- **Addressing policy (Switch).** The reader answers only the owner of each private room. A card in Nadya's room can be answered only by Nadya; the server operator's account, which Switch's setup puts in every channel, is refused (V6). The rules name people and never use Switch's `owner` subject, because the agents' owner is the server operator, whose account is in every channel.
+- **Addressing policy (Switch).** The reader answers only the owner of each private room. A card in Nadya's room can be answered only by Nadya; the server operator's account, which Switch's setup puts in every channel, is refused (V6). The rules name people and never use Switch's `owner` subject: `seed.py` registers the agents with the deployment token, so their owner in Switch is a service record, Agent Bootstrap, and no person.
 - **Strict handoff schema and a PII gate (our code).** Every handoff message is `BRv1 ` plus one JSON object in an inline-code span (Mattermost renders `:[` in plain JSON as an emoticon; the old form without backticks still decodes): enums, integer cents, ISO dates, sheet and line references, letter kinds, source refs, and a family member's username in call requests. The only sentences are BillRadar's prepared call answers and quotes from public policies, and each passes an on-machine gate built from the case's own private values. Unknown keys are refused on both ends (`tests/test_boundary.py`).
 - **Threat note.** The agent that talks with the family never holds a document and is refused the private rooms by Switch, so nothing typed in the family chat can pull a document out of it. By default it runs no model. With `LIVE=1` a model picks an answer's id for it and nothing the model writes is posted (`tests/test_chooser.py`). What Switch does not filter is what a member agent chooses to post; that part is the reader's code, tested above and checked live by V3.
 
@@ -301,7 +301,7 @@ What is different in Telegram:
 ## Known limits
 
 - A refused card answer is visible in Switch's log, not to the person who pressed the button.
-- Switch's card adds "Nobody here is linked to this agent's owner…": it tries to notify the agents' owner, the server operator; the reader mentions the room's owner itself.
+- In Mattermost, Switch's card adds "Nobody here is linked to this agent's owner…": the agents' owner is the service record Agent Bootstrap, which no account is linked to. The reader mentions the room's owner itself. Telegram cards do not carry this line.
 - Only BillRadar's fictional packs are ever read, in both modes. Reading a family's own papers is not built here.
 - Switch's setup puts the server operator's Mattermost accounts in every channel, including private rooms and `handoff`. The room boundary covers other people and agents and does not cover whoever runs the server.
 - Both agents run as one OS user, and each reads its own key from `state/` by convention. A real deployment would run them under separate users.
