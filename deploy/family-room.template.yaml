@@ -1,0 +1,33 @@
+# The rooms of BillRadar Family Room as a Switch 0.31.0 template, with the same names and members as
+# family_room/seed.py rooms_spec(). `make template-check` asks Switch to check this document.
+# seed.py creates the rooms on a stand; creating them from this document has not been tried.
+version: 1
+group:
+  name: BillRadar Family Room
+  description: One private room per person, an agents-only handoff room and the family room.
+rooms:
+  - name: nadya-papers
+    description: "BillRadar Family Room: nadya-papers"
+    channel_type: channel_private
+    agents: [reader]
+    users: [nadya]
+  - name: alex-papers
+    description: "BillRadar Family Room: alex-papers"
+    channel_type: channel_private
+    agents: [reader]
+    users: [alex]
+  - name: handoff
+    description: "BillRadar Family Room: handoff"
+    channel_type: channel_private
+    agents: [reader, coordinator, auditor]
+    users: []
+  - name: family
+    description: "BillRadar Family Room: family"
+    channel_type: channel_private
+    agents: [coordinator, auditor]
+    users: [nadya, alex]
+  - name: canary-control
+    description: "BillRadar Family Room: canary-control"
+    channel_type: channel_private
+    agents: [auditor]
+    users: []
